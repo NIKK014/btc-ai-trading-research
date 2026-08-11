@@ -35,32 +35,51 @@ except ImportError:  # pragma: no cover
 #: The ONLY host this project ever sends authenticated (order-placing) requests
 #: to. Deliberately a constant, not an env var. The production trading host
 #: does not appear anywhere in this codebase.
-BYBIT_DEMO_TRADE_URL = "https://api-demo.bybit.com"
+#:
+#: Bybit Testnet rather than Demo Trading, because Bybit EU cannot offer
+#: perpetual futures under MiCA and this research requires the ability to go
+#: short. Testnet is a wholly separate environment with its own balances -
+#: there is no mechanism by which a testnet order can touch real funds, which
+#: makes the safety guarantee stronger than demo trading, not weaker.
+BYBIT_PAPER_TRADE_URL = "https://api-testnet.bybit.com"
 
 #: Public market-data host. Used exclusively by the unauthenticated read-only
 #: client in ``src/data/``, which has no request-signing code and therefore
 #: cannot place an order even if it were called with credentials.
+#:
+#: Deliberately mainnet: testnet's order book is thin and its price history is
+#: unusable for research. Signals are therefore derived from real market data
+#: while orders execute against testnet's own book. See
+#: ``docs/limitations.md`` - the live demo proves the pipeline works, it does
+#: not produce meaningful P&L.
 BYBIT_PUBLIC_DATA_URL = "https://api.bybit.com"
 
 TRADING_MODE = os.getenv("TRADING_MODE", "").strip().lower()
 
+#: Modes in which no real funds can possibly be at risk.
+PAPER_MODES = frozenset({"testnet", "demo", "paper"})
+
 
 class UnsafeConfigurationError(RuntimeError):
-    """Raised when the application is not provably in demo-only mode."""
+    """Raised when the application is not provably in a paper-only mode."""
 
 
-def assert_demo_mode() -> None:
-    """Fail loudly unless the process is configured for demo trading.
+def assert_paper_mode() -> None:
+    """Fail loudly unless the process is configured for paper trading.
 
     Called at the top of any entrypoint that can place orders. Raises rather
     than warns: refusing to start is the correct behaviour here.
     """
-    if TRADING_MODE != "demo":
+    if TRADING_MODE not in PAPER_MODES:
         raise UnsafeConfigurationError(
-            f"TRADING_MODE must be 'demo' (got {TRADING_MODE!r}). "
-            "This project may never execute trades with real funds. "
-            "Set TRADING_MODE=demo in your .env file."
+            f"TRADING_MODE must be one of {sorted(PAPER_MODES)} "
+            f"(got {TRADING_MODE!r}). This project may never execute trades "
+            "with real funds. Set TRADING_MODE=testnet in your .env file."
         )
+
+
+#: Retained so older call sites keep working; identical behaviour.
+assert_paper_mode = assert_paper_mode
 
 
 # ---------------------------------------------------------------------------

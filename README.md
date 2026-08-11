@@ -1,29 +1,50 @@
 # Bitcoin AI Trading Research System
 
-An AI-engineering research project that asks three questions and tries to answer them honestly:
+An AI-engineering research project that asks three questions and answers them
+honestly.
 
-1. Which combination of **trading methodology, technical indicators and timeframe** produces the best risk-adjusted BTC day-trading performance?
-2. Does adding a **machine-learning filter** improve it?
-3. Does adding an **LLM trading judge** improve it further — or does it just match a rule you could write in four lines?
+1. Which **trading methodology, indicators and timeframe** produce the best
+   risk-adjusted BTC day-trading performance?
+2. Does a **machine-learning filter** improve it?
+3. Does an **LLM trading judge** improve it further — or does it just reproduce
+   what a four-line rule already does?
 
-The winning system then paper-trades BTCUSDT perpetuals on **Bybit Demo Trading**.
-
-> **This project cannot trade real money.** All execution is restricted to Bybit Demo Trading. See [Safety](#safety).
+> **The system cannot trade real money.** All execution is paper trading. See
+> [Safety](#safety).
 
 ---
 
-## Status
+## The answers
 
-| Phase | State |
-|---|---|
-| Scope review & architecture | Done — [`docs/00-scope-review.md`](docs/00-scope-review.md) |
-| Data loader + Parquet cache | Done |
-| Indicator library + causality tests | Done |
-| Strategies | Next |
-| Backtest engine | Pending |
-| ML models | Pending |
-| LLM judge | Pending |
-| Dashboard, live demo trading | Pending |
+**Q1 — Trend-following at 4h, and only that.** Of 651 configurations across
+four methodologies and three timeframes, one family survived selection. At 15
+minutes, transaction costs consumed a median **65% of capital** and not one
+configuration passed the eligibility gates.
+
+**Q2 — Not measurably.** The Random Forest beat its baseline by **+6.4 points**
+of balanced accuracy, but its effect on trading **reversed sign** between
+validation (−35.1%) and test (+12.0%), and never reached significance.
+
+**Q3 — No.** The LLM judge returned −0.3% against the deterministic rule's
++1.6%. It was not a rubber stamp — it vetoed 59% of proposals at moderate
+confidence — but it did not beat four lines of arithmetic.
+
+**And the headline:**
+
+| | Validation | Test |
+|---|---|---|
+| Return | +34.6% | **−10.5%** |
+| Sharpe | **1.92** | **−0.91** |
+
+A Sharpe of 1.92 became −0.91 the moment the data had not been selected on.
+That gap is what parameter selection bought and could not deliver — the most
+honest number in the project.
+
+Yet over the same period **BTC fell 41.0% with a 53.5% drawdown**. The system
+lost 10.5% with a 14.5% drawdown; with the LLM layer, 0.3% with a 7.7%
+drawdown. It lost money and still substantially outperformed holding.
+
+Full results: [`docs/results.md`](docs/results.md)
 
 ---
 
@@ -32,107 +53,163 @@ The winning system then paper-trades BTCUSDT perpetuals on **Bybit Demo Trading*
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env          # add OPENAI_API_KEY for System C
 
-cp .env.example .env        # then fill in your keys
-python scripts/fetch_data.py    # downloads and caches BTCUSDT 15m/1h/4h
-pytest -q                       # 36 tests, all offline
+python scripts/fetch_data.py  # downloads and caches BTCUSDT 15m/1h/4h
+pytest -q                     # 187 tests, all offline
 ```
 
-`fetch_data.py` downloads from 2020-01-01 to now and caches to `data/raw/*.parquet`.
-Re-run with `--refresh` to pull in newly closed candles; it never re-downloads history it already has.
+### Reproduce the study
+
+```bash
+python scripts/run_baseline.py    # System A leaderboard          (~2s)
+python scripts/run_optimizer.py   # 651 configurations            (~23s)
+python scripts/run_ml.py          # models + System A vs B        (~10s)
+python scripts/run_llm.py         # all arms on validation        (~60s)
+python scripts/run_final.py       # THE out-of-sample test        (~60s)
+```
+
+`run_final.py` reads the test period, which nothing else in the project can.
+**Run it once.** Re-running after changing anything turns the test set into a
+second validation set.
+
+### Run it live
+
+```bash
+python scripts/check_setup.py                        # preflight
+nohup python main.py --system C > logs/live.log 2>&1 &   # trader
+streamlit run dashboard/app.py                       # dashboard
+```
 
 ---
 
 ## Experimental design
 
-The point of the project is the comparison, not the profit. Three systems trade the **same signal universe**, changing exactly one thing at a time:
+Every arm trades the **same signal universe**, with exactly one thing changed:
 
-| System | Pipeline |
+| Arm | Pipeline |
 |---|---|
-| **A — Traditional** | Indicators → strategy rules → trade |
-| **B — ML enhanced** | A's signals, taken only when the ML model agrees above a probability threshold |
-| **C — AI judge** | B's inputs, with an LLM making the final LONG/SHORT/HOLD call |
-| **Control** | B's inputs, with a *deterministic* judge — trade only when strategy and ML agree |
+| **A** | Indicators → strategy rules → trade |
+| **B** | A's signals, only when the ML model agrees above a threshold |
+| **C** | B's inputs, with an LLM judge making the final call |
+| Control — *always agree* | Approves everything; must reproduce A exactly |
+| Control — *deterministic* | Trade only when strategy and model agree |
 
-The control arm matters: an LLM that vetoes trades will change performance whether or not it has any insight. Without a deterministic judge to compare against, "the LLM helped" is not a claim you can defend.
+The controls are the point. A judge that vetoes trades changes performance
+whether or not it understands anything — filtering alone reshapes the return
+distribution. Without a deterministic benchmark, "the LLM helped" is not a
+claim you can defend.
 
-### How data leakage is prevented
+**Every difference is reported with a bootstrap confidence interval. If the
+interval contains zero, the systems are not distinguishable at this sample
+size** — which for these questions is a legitimate answer.
+
+---
+
+## How leakage was prevented
 
 | Risk | Control |
 |---|---|
-| Indicators peeking forward | Every indicator hand-written and proven causal by automated test |
-| Ichimoku Chikou Span (close shifted *backwards*) | Indicator excluded entirely |
-| Fibonacci / swing-based support-resistance | Excluded; replaced by Donchian channels of the *previous* N bars |
-| Shuffled time series | Never shuffled — chronological splits only |
-| Overlapping labels leaking across split seams | 4-bar embargo either side of every boundary |
-| Scaler fitted on the full dataset | Fitted on train only |
-| Test set used for tuning | Test period touched exactly once, at the end |
-| Acting on an unclosed candle | Loader drops the still-forming final candle |
-| **The LLM having memorised BTC history** | Prompt contains no timestamps and no absolute prices — only relative, scale-free values |
+| Indicators peeking forward | Hand-written; a test recomputes each on truncated data and asserts history is unchanged |
+| **Ichimoku Chikou Span** | Excluded — it is the close shifted *backwards*, so reading it at `t` reads `t+26` |
+| Fibonacci / swing S-R | Excluded — hindsight-derived. Replaced by Donchian channels of the *previous* N bars |
+| Shuffled time series | Never shuffled; chronological splits only |
+| Overlapping labels at split seams | 4-bar embargo at every boundary |
+| Scaler fitted on all data | Fitted inside the pipeline, train only |
+| Test set used for tuning | `get_split("test")` raises unless explicitly unlocked |
+| Acting on an unclosed candle | The loader drops the still-forming final candle |
+| **The LLM having memorised BTC history** | No dates, no absolute prices in the prompt — enforced by test |
+| Same-candle barrier ties | Labelled HOLD and excluded, never guessed |
+| Live inference using training data | Uses the feature builder, not the label-filtered dataset — enforced by test |
 
-That last one is the subtle one. An LLM asked about BTC at "$118,320 on 3 March" may partly recall what happened next. Every value the judge sees is relative: RSI, % distance from EMA, ATR as % of price, ML probability.
+The subtle one is the LLM. Told BTC is at $118,320 on 3 March, a model that has
+read the internet may partially recall what happened next — look-ahead bias
+travelling through model weights, invisible to every pandas-level control.
+Every value the judge sees is relative: RSI, % from EMA, ATR as % of price.
 
-### Chronological splits
-
-| Split | Period | Purpose |
-|---|---|---|
-| Train | 2020-01 → 2023-12 | ML model fitting |
-| Validation | 2024-01 → 2025-06 | Strategy selection, parameter search, thresholds |
-| **Test** | 2025-07 → present | **Final comparison. Run once.** |
+Detail: [`docs/methodology.md`](docs/methodology.md)
 
 ---
 
 ## Safety
 
-Four independent layers, any one of which prevents real-money execution:
+Four independent layers, any one of which prevents a real-money trade:
 
-1. **The production trading host does not exist in this codebase.** It cannot be reached by a typo. A test enforces this.
-2. **Order placement is hardwired to a module-level constant** (`BYBIT_DEMO_TRADE_URL`), not an environment variable — a malformed `.env` cannot redirect order flow.
-3. **`TRADING_MODE` must equal `demo`** or the process raises `UnsafeConfigurationError` and exits before any client is constructed.
-4. **Demo API keys are separate credentials** that do not authenticate against production at all.
+1. **The production trading host is absent from the codebase.** A test enforces
+   it. It cannot be reached by a typo.
+2. **The paper host is a module constant**, not an environment variable — a
+   malformed `.env` cannot redirect order flow.
+3. **`assert_paper_mode()` runs in the client constructor.**
+4. **Every request re-checks the base URL** immediately before sending.
 
-Market data is fetched by a read-only client that has no signing code, no credentials and no POST method — verified by test. `.env` is gitignored from the first commit.
+Market data is fetched by a read-only client with no signing code, no
+credentials and no POST method — verified by test. `.env` is gitignored from
+the first commit.
+
+Execution runs through a local simulator that fills against **real** BTC prices
+using the backtester's exact fee, slippage and stop rules. A Bybit V5 client
+exists and is switchable with `--broker bybit`; Bybit EU offers no perpetual
+futures under MiCA, which is why the simulator is the default. See
+[`docs/architecture.md`](docs/architecture.md#the-venue-problem).
 
 ---
 
 ## Project layout
 
 ```
-config/settings.py          Every tunable, one place
+config/settings.py         Every tunable, one place
 src/
-  data/public_client.py     Read-only market data (no auth capability)
-  data/loader.py            Fetch, Parquet cache, integrity validation
-  indicators/indicators.py  Hand-written, provably causal
-  strategies/               Trend / momentum / mean-reversion / breakout
-  backtesting/              Engine (fees, slippage, SL/TP) + metrics
-  models/                   Features, triple-barrier labels, training
-  risk/manager.py           Deterministic sizing and limits
-  agents/                   LLM judge + deterministic control
-  exchange/                 Demo-only executor
-  database/                 SQLite persistence
-dashboard/app.py            Streamlit (read-only)
-scripts/fetch_data.py       Data acquisition CLI
-tests/                      Causality, correctness, safety
-docs/                       Methodology and results
+  data/                    Read-only market client, loader, Parquet cache
+  indicators/              18 hand-written, provably causal indicators
+  strategies/              Trend / momentum / mean-reversion / breakout + benchmark
+  backtesting/             Engine, metrics + bootstrap CIs, optimiser, split discipline
+  models/                  Triple-barrier labels, features, training, ML filter
+  agents/                  LLM judge, deterministic controls, comparison harness
+  risk/                    Deterministic sizing and limits
+  exchange/                Simulated broker + Bybit client, one interface
+  database/                SQLite persistence
+dashboard/                 Streamlit, read-only
+scripts/                   fetch_data · run_baseline · run_optimizer · run_ml
+                           run_llm · run_final · check_setup
+tests/                     187 tests: causality, correctness, safety
+docs/                      Methodology, results, limitations, presentation guide
+main.py                    Live loop, separate process
 ```
 
 ### Why no `pandas-ta` or TA-Lib
 
-`pandas-ta` has NumPy 2.x incompatibilities and an uncertain maintenance future; TA-Lib needs a C toolchain build. Every indicator here is ~10 lines of pandas, has zero dependency risk, and — more importantly — can be *proved* causal. `tests/test_indicators.py` recomputes every indicator on a truncated series and asserts that historical values are unchanged, which makes look-ahead bias impossible to introduce without a red build.
-
-### Data conventions
-
-Candle timestamps are **UTC open times**. A `12:00` candle on the 1h timeframe covers 12:00–12:59 and is only complete at 13:00. Gaps from exchange downtime are left unfilled — interpolating candles would invent price action that never happened.
+`pandas-ta` has NumPy 2.x incompatibilities and an uncertain future; TA-Lib
+needs a C toolchain build. More importantly, every indicator is a potential
+source of look-ahead bias, and a from-scratch implementation can be **proved**
+causal. ~150 lines of pandas buys zero dependency risk and full auditability.
 
 ---
 
-## Limitations
+## Documentation
 
-Recorded honestly, and expanded as the project progresses:
+| Document | Contents |
+|---|---|
+| [methodology.md](docs/methodology.md) | Experimental design, splits, leakage controls, execution assumptions |
+| [results.md](docs/results.md) | Every result, with confidence intervals and regime splits |
+| [strategies.md](docs/strategies.md) | The seven strategies and why each was built that way |
+| [machine-learning.md](docs/machine-learning.md) | Target design, features, models, the filter |
+| [llm-judge.md](docs/llm-judge.md) | Prompt design, structured output, caching, controls |
+| [architecture.md](docs/architecture.md) | System design, safety layers, the venue problem |
+| [limitations.md](docs/limitations.md) | Everything this project does not establish |
+| [presentation.md](docs/presentation.md) | Slide plan and anticipated questions |
+| [00-scope-review.md](docs/00-scope-review.md) | The original scope review |
 
-- Backtests ignore perpetual funding payments.
-- Live paper trading runs for hours, not months — it demonstrates that the loop works, it is not evidence that the strategy works.
-- Sample sizes are small enough that most differences between systems will fall inside their confidence intervals. Metrics are reported with bootstrap CIs for exactly this reason.
-- Selecting the best of many configurations guarantees the winner is partly lucky; the validation-vs-test degradation is reported rather than hidden.
+---
 
-**This is a research and engineering project. It is not investment advice, and it does not claim to be a profitable trading system.**
+## What this project does not claim
+
+It does not claim to have found a profitable strategy — it found one that lost
+10.5% out of sample. It does not claim ML improves trading — the effect
+reversed sign between splits. It does not claim LLMs make good traders — one
+failed to beat four lines of arithmetic.
+
+It claims that these questions were asked in a way that could have produced the
+opposite answer, and that the negative results are as reliable as the method
+allows.
+
+**Research and engineering project. Not investment advice.**

@@ -241,3 +241,39 @@ def test_correlated_pairs_finds_duplicated_information():
     frame = pd.DataFrame({"a": np.arange(100.0), "b": np.arange(100.0) * 2 + 1, "c": np.random.default_rng(0).normal(size=100)})
     pairs = correlated_pairs(frame, threshold=0.95)
     assert any({p["a"], p["b"]} == {"a", "b"} for p in pairs)
+
+
+def test_live_prediction_must_not_use_the_training_dataset(ohlcv):
+    """The bug this test exists to prevent.
+
+    ``build_dataset`` drops the trailing rows whose *label* window is
+    incomplete - correct for training, fatal for live inference, because the
+    most recent candle can never have a label and would therefore never
+    receive a prediction. The live loop would then run permanently with
+    ml_prediction=0, silently disabling the ML and LLM layers while appearing
+    to work.
+    """
+    from src.models.features import build_dataset, build_features
+
+    latest = ohlcv.index[-1]
+    training, _, _ = build_dataset(ohlcv)
+    inference = build_features(ohlcv).dropna()
+
+    assert latest not in training.index, "training set correctly excludes unlabelled rows"
+    assert latest in inference.index, "inference must cover the most recent candle"
+    assert len(inference) > len(training)
+
+
+def test_the_live_loop_uses_the_inference_path():
+    """Guard against a future refactor reintroducing the bug."""
+    import inspect
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8")
+    prediction_block = source[source.index("# ML prediction for the latest closed candle."):]
+    prediction_block = prediction_block[: prediction_block.index("# Decide.")]
+
+    assert "build_features(" in prediction_block
+    assert "build_dataset(" not in prediction_block, (
+        "live inference must not use the label-filtered training dataset"
+    )

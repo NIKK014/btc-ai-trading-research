@@ -4,9 +4,34 @@ from __future__ import annotations
 
 import logging
 import sys
+import warnings
 from pathlib import Path
 
 from config.settings import LOG_LEVEL, PATHS
+
+
+def _silence_accelerate_matmul_warnings() -> None:
+    """Suppress a known spurious NumPy warning on Apple silicon.
+
+    NumPy built against Apple's Accelerate BLAS emits
+    ``RuntimeWarning: divide by zero / overflow / invalid value encountered in
+    matmul`` for matrix multiplications larger than roughly 14x14, even when
+    the result is entirely correct. Accelerate leaves floating-point exception
+    flags set from its SIMD paths and NumPy reports them. The same code under
+    OpenBLAS produces no warnings and identical numbers.
+
+    This filter is deliberately narrow - it matches only ``matmul`` - so
+    genuine numerical problems anywhere else still surface. Verified against a
+    Linux/OpenBLAS run: model scores match to three decimal places.
+
+    Tracking: numpy#28687, numpy#29820, scikit-learn#31395.
+    """
+    for message in (
+        "divide by zero encountered in matmul",
+        "overflow encountered in matmul",
+        "invalid value encountered in matmul",
+    ):
+        warnings.filterwarnings("ignore", message=message, category=RuntimeWarning)
 
 _CONFIGURED = False
 _FORMAT = "%(asctime)s | %(levelname)-7s | %(name)-22s | %(message)s"
@@ -33,6 +58,7 @@ def setup_logging(logfile: str | Path | None = "app.log") -> None:
     # These are noisy at DEBUG and never useful to us.
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    _silence_accelerate_matmul_warnings()
     _CONFIGURED = True
 
 

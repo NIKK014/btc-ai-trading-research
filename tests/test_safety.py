@@ -19,22 +19,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_TRADE_HOST = "api" + ".bybit.com"  # split so this file is not itself a match
 
 
-def test_demo_trade_host_is_a_module_constant():
+def test_paper_trade_host_is_a_module_constant():
     """Safety-critical values must not be overridable by environment variables."""
-    assert settings.BYBIT_DEMO_TRADE_URL == "https://api-demo.bybit.com"
+    assert settings.BYBIT_PAPER_TRADE_URL == "https://api-testnet.bybit.com"
 
 
-def test_assert_demo_mode_rejects_anything_but_demo(monkeypatch):
+def test_assert_paper_mode_rejects_live_trading(monkeypatch):
     monkeypatch.setattr(settings, "TRADING_MODE", "live")
-    with pytest.raises(settings.UnsafeConfigurationError, match="must be 'demo'"):
-        settings.assert_demo_mode()
+    with pytest.raises(settings.UnsafeConfigurationError, match="must be one of"):
+        settings.assert_paper_mode()
 
     monkeypatch.setattr(settings, "TRADING_MODE", "")
     with pytest.raises(settings.UnsafeConfigurationError):
-        settings.assert_demo_mode()
+        settings.assert_paper_mode()
 
-    monkeypatch.setattr(settings, "TRADING_MODE", "demo")
-    settings.assert_demo_mode()  # must not raise
+    for safe in ("testnet", "demo", "paper"):
+        monkeypatch.setattr(settings, "TRADING_MODE", safe)
+        settings.assert_paper_mode()  # must not raise
 
 
 def test_public_client_cannot_sign_requests():
@@ -79,7 +80,7 @@ def test_production_trade_host_does_not_appear_in_source():
 
 def test_env_example_exists_and_holds_no_real_secrets():
     example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
-    assert "TRADING_MODE=demo" in example
+    assert "TRADING_MODE=testnet" in example
     for line in example.splitlines():
         if line.startswith(("BYBIT_API_KEY", "BYBIT_API_SECRET", "OPENAI_API_KEY")):
             assert line.split("=", 1)[1].strip() == "", f"populated secret in .env.example: {line}"

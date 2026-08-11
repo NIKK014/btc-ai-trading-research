@@ -115,7 +115,24 @@ class Repository:
     def __init__(self, path: Optional[Path] = None) -> None:
         self.path = Path(path) if path else PATHS.database
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._journal_mode: Optional[str] = None
         self._initialise()
+
+    @staticmethod
+    def _negotiate_journal_mode(connection: sqlite3.Connection) -> str:
+        """Use WAL where the filesystem supports it, otherwise fall back."""
+        try:
+            mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            if str(mode).lower() == "wal":
+                return "wal"
+        except sqlite3.OperationalError:
+            pass
+        connection.execute("PRAGMA journal_mode=DELETE")
+        logger.warning(
+            "This filesystem does not support WAL; using DELETE journal mode. "
+            "The dashboard may briefly block the trading loop under heavy reads."
+        )
+        return "delete"
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -123,7 +140,14 @@ class Repository:
         connection.row_factory = sqlite3.Row
         try:
             # WAL lets the dashboard read while the trading loop writes.
-            connection.execute("PRAGMA journal_mode=WAL")
+            # Some network and container-mounted filesystems do not support the
+            # shared-memory locking WAL needs, so fall back rather than fail:
+            # a slower journal mode is far better than a trader that will not
+            # start.
+            if self._journal_mode is None:
+                self._journal_mode = self._negotiate_journal_mode(connection)
+            elif self._journal_mode == "wal":
+                connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             yield connection
             connection.commit()

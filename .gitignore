@@ -28,3 +28,4 @@ env/
 .DS_Store
 .vscode/
 .idea/
+data/live.lock

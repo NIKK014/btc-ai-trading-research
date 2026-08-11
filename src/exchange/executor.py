@@ -2,7 +2,7 @@
 
 Sits at the end of the pipeline:
 
-    signals -> ML filter -> judge -> RISK MANAGER -> executor -> Bybit demo
+    signals -> ML filter -> judge -> RISK MANAGER -> executor -> Bybit testnet
 
 The executor's job is narrow on purpose. It does not decide direction; by the
 time a decision reaches it, direction is settled. It asks the risk manager
@@ -21,9 +21,9 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from config.settings import BACKTEST, DATA, RISK, TRADING_MODE, assert_demo_mode
+from config.settings import BACKTEST, DATA, RISK, TRADING_MODE, assert_paper_mode
 from src.database.repository import Repository
-from src.exchange.bybit_client import BybitDemoClient
+from src.exchange.bybit_client import BybitPaperClient
 from src.risk.manager import PositionPlan, RiskManager, RiskState
 from src.utils.logging_setup import get_logger
 
@@ -33,11 +33,11 @@ ACTION_NAMES = {1: "LONG", -1: "SHORT", 0: "FLAT"}
 
 
 class PaperExecutor:
-    """Turns approved decisions into demo orders, and logs everything."""
+    """Turns approved decisions into paper orders, and logs everything."""
 
     def __init__(
         self,
-        client: Optional[BybitDemoClient] = None,
+        client: Optional[BybitPaperClient] = None,
         repository: Optional[Repository] = None,
         risk_manager: Optional[RiskManager] = None,
         symbol: str = DATA.symbol,
@@ -45,9 +45,11 @@ class PaperExecutor:
         strategy_name: str = "unknown",
         system: str = "C_rules_ml_llm",
     ) -> None:
-        assert_demo_mode()
+        assert_paper_mode()
 
-        self.client = client or BybitDemoClient()
+        # Duck-typed on purpose: BybitPaperClient and SimulatedBroker expose
+        # the same surface, so execution is independent of the venue.
+        self.client = client if client is not None else BybitPaperClient()
         self.repository = repository or Repository()
         self.risk = risk_manager or RiskManager()
         self.symbol = symbol
@@ -66,7 +68,7 @@ class PaperExecutor:
         self.repository.set_state("symbol", symbol)
 
         logger.info(
-            "PaperExecutor ready | MODE: DEMO | %s %s | equity %.2f USDT",
+            "PaperExecutor ready | MODE: TESTNET | %s %s | equity %.2f USDT",
             symbol,
             timeframe,
             equity,
@@ -102,11 +104,22 @@ class PaperExecutor:
         if recorded is None or position["direction"] != 0:
             return
 
-        exit_price = position.get("entry_price") or recorded["entry_price"]
         direction = recorded["direction"]
         size = recorded["size"]
-        pnl = direction * size * (exit_price - recorded["entry_price"])
         notional = size * recorded["entry_price"]
+
+        # Prefer the broker's record of how the position actually closed. The
+        # fallback infers an exit from the position snapshot, which reports
+        # zero P&L - correct only when nothing really happened.
+        closed = getattr(self.client, "state", {}).get("last_close") if hasattr(self.client, "state") else None
+        if closed:
+            exit_price = float(closed["price"])
+            pnl = float(closed["pnl"])
+            reason = closed.get("reason", "closed_on_exchange")
+        else:
+            exit_price = position.get("entry_price") or recorded["entry_price"]
+            pnl = direction * size * (exit_price - recorded["entry_price"])
+            reason = "closed_on_exchange"
 
         self.repository.close_trade(
             trade_id=recorded["id"],
@@ -114,11 +127,12 @@ class PaperExecutor:
             exit_price=exit_price,
             pnl=pnl,
             return_pct=pnl / notional if notional else 0.0,
-            exit_reason="closed_on_exchange",
+            exit_reason=reason,
         )
         logger.info(
-            "Reconciled: position closed on the exchange (trade %s, pnl %.2f)",
+            "Reconciled: position closed (trade %s, %s, pnl %.2f)",
             recorded["id"],
+            reason,
             pnl,
         )
 
@@ -169,6 +183,30 @@ class PaperExecutor:
             self._log(log, final_action=0)
             return None
 
+        # Price the order against the venue we are actually trading on.
+        # Signals come from mainnet history; testnet has its own book and its
+        # own price. Sizing and stops must use the latter or they will be
+        # meaningless.
+        venue_price = price
+        try:
+            venue_price = self.client.last_price(self.symbol)
+            divergence = abs(venue_price / price - 1.0) if price else 0.0
+            if divergence > 0.05:
+                logger.warning(
+                    "Venue price %.2f differs from signal price %.2f by %.1f%%. "
+                    "Testnet runs its own order book; P&L here is not comparable "
+                    "to the research results.",
+                    venue_price,
+                    price,
+                    divergence * 100,
+                )
+            # ATR is expressed in mainnet price units, so rescale it to the
+            # venue's price level, keeping the stop the same *fraction* of price.
+            if price:
+                atr = atr * (venue_price / price)
+        except Exception as exc:  # noqa: BLE001 - fall back to the signal price
+            logger.warning("Could not read venue price (%s); using signal price.", exc)
+
         # Risk gate.
         allowed, reason = self.risk.can_open(self.state)
         if not allowed:
@@ -178,7 +216,7 @@ class PaperExecutor:
 
         plan = self.risk.plan(
             direction=direction,
-            price=price,
+            price=venue_price,
             atr=atr,
             equity=self.state.equity,
             leverage=BACKTEST.leverage,
@@ -209,7 +247,7 @@ class PaperExecutor:
                 "stop_price": plan.stop_price,
                 "target_price": plan.target_price,
                 "fees": plan.notional * BACKTEST.taker_fee,
-                "mode": "demo",
+                "mode": "testnet",
             }
         )
         self.state.open_positions = 1

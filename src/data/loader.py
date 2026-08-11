@@ -234,12 +234,22 @@ def _extend_cache(
     if frame.empty:
         return frame
     last = frame.index[-1]
-    fresh = fetch_ohlcv(
-        timeframe,
-        start=last,
-        symbol=symbol,
-        config=config,
-    )
+
+    # A transient network failure must not kill a long-running trading loop.
+    # Falling back to the cache means the next cycle simply sees no new candle
+    # and does nothing, which is the correct behaviour when we cannot see the
+    # market.
+    try:
+        fresh = fetch_ohlcv(timeframe, start=last, symbol=symbol, config=config)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad
+        logger.warning(
+            "Could not refresh %s data (%s); continuing with %d cached candles.",
+            timeframe,
+            exc,
+            len(frame),
+        )
+        return frame
+
     if fresh.empty:
         return frame
     combined = pd.concat([frame, fresh])

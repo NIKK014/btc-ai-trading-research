@@ -1,0 +1,16 @@
+{
+  "strategy": "ema_rsi_trend",
+  "timeframe": "4h",
+  "params": "ema_fast=9,ema_slow=100,rsi_period=21,rsi_midline=50.0,rsi_upper_block=78.0,rsi_lower_block=22.0,adx_min=0.0",
+  "model": "random_forest",
+  "threshold": 0.35,
+  "test_start": "2025-06-30 16:00:00+00:00",
+  "test_end": "2026-08-11 08:00:00+00:00",
+  "validation": {
+    "total_return": 0.34568673591302534,
+    "sharpe": 1.9215600027881938,
+    "sortino": 1.6651769939227365,
+    "max_drawdown": 0.07566565410447756,
+    "n_trades": 157
+  }
+}

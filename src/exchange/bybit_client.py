@@ -1,24 +1,35 @@
-"""Signed Bybit V5 client - demo trading only.
+"""Signed Bybit V5 client - Bybit Testnet only.
 
 Safety architecture
 -------------------
 Four independent layers, any one of which prevents a real-money trade:
 
 1. **The production host is not in this codebase.** This module imports
-   :data:`~config.settings.BYBIT_DEMO_TRADE_URL` and has no other host. There
+   :data:`~config.settings.BYBIT_PAPER_TRADE_URL` and has no other host. There
    is no string a typo could turn into the production endpoint, and a test
    enforces that no module outside the read-only market-data client mentions
    one.
 2. **The host is a constant, not an environment variable.** A malformed
    ``.env`` cannot redirect order flow.
-3. **:func:`assert_demo_mode` runs in the constructor.** The client cannot be
-   built unless ``TRADING_MODE=demo``.
+3. **:func:`assert_paper_mode` runs in the constructor.** The client cannot be
+   built unless ``TRADING_MODE`` is a paper mode.
 4. **Every order re-checks the base URL immediately before sending.** Cheap,
    and it survives refactors that move code around.
 
-On top of that, the credentials themselves are demo-account keys, which Bybit
-does not accept on the production endpoint at all. Two independent systems
-would both have to fail.
+On top of that, testnet credentials are issued by an entirely separate system
+and are not recognised on mainnet at all. Testnet balances are not
+convertible to anything: there is no mechanism by which an order placed here
+could touch real money.
+
+Why testnet rather than Demo Trading: Bybit EU cannot offer perpetual futures
+under MiCA, and this research requires the ability to go short. Testnet
+provides linear perpetuals with faucet-funded balances.
+
+Caveat worth stating in the write-up: testnet runs its own order book, so its
+prices drift from the real market. Signals are computed from mainnet history
+while orders execute against testnet's book, which means the live run
+demonstrates that the pipeline works end to end - it does not produce
+meaningful P&L.
 """
 
 from __future__ import annotations
@@ -32,7 +43,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from config.settings import BYBIT_DEMO_TRADE_URL, assert_demo_mode
+from config.settings import BYBIT_PAPER_TRADE_URL, assert_paper_mode
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -40,20 +51,20 @@ logger = get_logger(__name__)
 RECV_WINDOW = "5000"
 
 
-class BybitDemoError(RuntimeError):
+class BybitPaperError(RuntimeError):
     """The exchange rejected a request."""
 
 
 class UnsafeEndpointError(RuntimeError):
-    """A request was about to leave for somewhere other than the demo host."""
+    """A request was about to leave for somewhere other than the paper host."""
 
 
-class BybitDemoClient:
-    """Authenticated client for Bybit Demo Trading.
+class BybitPaperClient:
+    """Authenticated client for Bybit Testnet.
 
     Args:
-        api_key: Demo API key. Falls back to ``BYBIT_API_KEY``.
-        api_secret: Demo API secret. Falls back to ``BYBIT_API_SECRET``.
+        api_key: Testnet API key. Falls back to ``BYBIT_API_KEY``.
+        api_secret: Testnet API secret. Falls back to ``BYBIT_API_SECRET``.
         session: Injectable for testing.
     """
 
@@ -64,31 +75,31 @@ class BybitDemoClient:
         session: Any = None,
         timeout: int = 15,
     ) -> None:
-        # Layer 3: refuse to exist outside demo mode.
-        assert_demo_mode()
+        # Layer 3: refuse to exist outside a paper-trading mode.
+        assert_paper_mode()
 
-        self.base_url = BYBIT_DEMO_TRADE_URL
+        self.base_url = BYBIT_PAPER_TRADE_URL
         self.api_key = api_key or os.getenv("BYBIT_API_KEY", "")
         self.api_secret = api_secret or os.getenv("BYBIT_API_SECRET", "")
         self.timeout = timeout
         self._session = session or requests.Session()
 
         if not self.api_key or not self.api_secret:
-            raise BybitDemoError(
+            raise BybitPaperError(
                 "BYBIT_API_KEY and BYBIT_API_SECRET must be set. "
-                "Generate them from the Bybit DEMO account, not your real one."
+                "Generate them at testnet.bybit.com, not on the live exchange."
             )
 
-        logger.info("Bybit client ready | MODE: DEMO | host: %s", self.base_url)
+        logger.info("Bybit client ready | MODE: TESTNET (paper) | host: %s", self.base_url)
 
     # -- safety ------------------------------------------------------------
 
-    def _assert_demo_endpoint(self) -> None:
+    def _assert_paper_endpoint(self) -> None:
         """Layer 4: verified immediately before every request leaves."""
-        if self.base_url != BYBIT_DEMO_TRADE_URL:
+        if self.base_url != BYBIT_PAPER_TRADE_URL:
             raise UnsafeEndpointError(
                 f"Refusing to send: base URL is {self.base_url!r}, "
-                f"expected {BYBIT_DEMO_TRADE_URL!r}. This project may never "
+                f"expected {BYBIT_PAPER_TRADE_URL!r}. This project may never "
                 "trade real funds."
             )
 
@@ -112,7 +123,7 @@ class BybitDemoClient:
         }
 
     def _request(self, method: str, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        self._assert_demo_endpoint()
+        self._assert_paper_endpoint()
         url = f"{self.base_url}{path}"
 
         if method == "GET":
@@ -126,10 +137,28 @@ class BybitDemoClient:
                 url, data=body, headers=self._headers(body), timeout=self.timeout
             )
 
+        if response.status_code in (401, 403):
+            raise BybitPaperError(
+                f"Bybit rejected the credentials ({response.status_code}: "
+                f"{response.text.strip()[:120]}).\n\n"
+                "  Testnet uses SEPARATE API keys from any mainnet account.\n"
+                "  A mainnet or Bybit EU key will always be rejected here - "
+                "which is the safeguard working.\n\n"
+                "  To create the right key:\n"
+                "    1. Go to testnet.bybit.com and register (it is a separate\n"
+                "       signup from bybit.com; no KYC, no real funds involved)\n"
+                "    2. Fund it from the testnet faucet: Assets -> Request funds\n"
+                "    3. Avatar menu -> API -> Create New Key (System-generated)\n"
+                "    4. Permissions: Read-Write, and enable Contract Trade\n"
+                "    5. Put it in .env as BYBIT_API_KEY / BYBIT_API_SECRET\n\n"
+                "  If the key is definitely a testnet key, check your system "
+                "clock: Bybit rejects requests whose timestamp is out of sync."
+            )
+
         response.raise_for_status()
         payload = response.json()
         if payload.get("retCode") != 0:
-            raise BybitDemoError(
+            raise BybitPaperError(
                 f"Bybit {payload.get('retCode')}: {payload.get('retMsg')} "
                 f"({method} {path} {params})"
             )
@@ -138,13 +167,13 @@ class BybitDemoClient:
     # -- account -----------------------------------------------------------
 
     def wallet_equity(self, coin: str = "USDT") -> float:
-        """Total equity of the demo unified account."""
+        """Total equity of the testnet unified account."""
         result = self._request(
             "GET", "/v5/account/wallet-balance", {"accountType": "UNIFIED"}
         )
         accounts = result.get("list", [])
         if not accounts:
-            raise BybitDemoError("No wallet returned")
+            raise BybitPaperError("No wallet returned")
 
         account = accounts[0]
         for entry in account.get("coin", []):
@@ -175,6 +204,23 @@ class BybitDemoClient:
             "unrealised_pnl": float(entry.get("unrealisedPnl") or 0.0),
         }
 
+    def last_price(self, symbol: str, category: str = "linear") -> float:
+        """Latest traded price on the venue we are actually trading on.
+
+        Testnet runs its own order book, so its price can differ from the real
+        market by a wide margin. Orders must be sized and stopped against the
+        price they will actually fill at, not against the mainnet price the
+        signal was derived from - otherwise stops land nowhere near the book
+        and fill instantly or never.
+        """
+        result = self._request(
+            "GET", "/v5/market/tickers", {"category": category, "symbol": symbol}
+        )
+        tickers = result.get("list", [])
+        if not tickers:
+            raise BybitPaperError(f"No ticker returned for {symbol}")
+        return float(tickers[0]["lastPrice"])
+
     def set_leverage(self, symbol: str, leverage: float, category: str = "linear") -> None:
         """Set leverage, tolerating the "already set" response."""
         try:
@@ -189,7 +235,7 @@ class BybitDemoClient:
                 },
             )
             logger.info("Leverage set to %sx on %s", leverage, symbol)
-        except BybitDemoError as exc:
+        except BybitPaperError as exc:
             if "110043" in str(exc) or "not modified" in str(exc).lower():
                 return  # already at this leverage
             raise
@@ -207,7 +253,7 @@ class BybitDemoClient:
         category: str = "linear",
         quantity_decimals: int = 3,
     ) -> str:
-        """Submit a market order to the DEMO account. Returns the order id."""
+        """Submit a market order to the TESTNET account. Returns the order id."""
         if direction == 0:
             raise ValueError("direction must be +1 or -1")
 
@@ -236,7 +282,7 @@ class BybitDemoClient:
         result = self._request("POST", "/v5/order/create", params)
         order_id = result.get("orderId", "")
         logger.info(
-            "DEMO order placed: %s %s %s (sl=%s tp=%s) -> %s",
+            "TESTNET order placed: %s %s %s (sl=%s tp=%s) -> %s",
             params["side"],
             quantity_string,
             symbol,
