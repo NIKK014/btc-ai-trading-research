@@ -137,6 +137,19 @@ class Strategy(ABC):
         return {}
 
     @classmethod
+    def is_valid(cls, params: StrategyParams) -> bool:
+        """Whether a parameter combination is internally coherent.
+
+        Grid search takes the cartesian product of every parameter, which
+        inevitably produces nonsense - a "fast" EMA slower than the slow one,
+        an oversold threshold above the overbought one. Rejecting these up
+        front stops the search budget being spent on configurations that could
+        never trade sensibly, and stops them polluting the distribution used to
+        judge selection bias.
+        """
+        return True
+
+    @classmethod
     def iter_param_sets(cls) -> Iterator[StrategyParams]:
         """Yield one params instance per point in :meth:`param_grid`."""
         import itertools
@@ -250,6 +263,7 @@ def registry() -> Dict[str, type]:
         mean_reversion.RsiBollingerReversion,
         mean_reversion.VwapStretchReversion,
         breakout.DonchianVolumeBreakout,
+        breakout.BollingerSqueezeBreakout,
         benchmark.BuyAndHold,
     ]
     return {cls.name: cls for cls in classes}
