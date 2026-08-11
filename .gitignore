@@ -1,0 +1,30 @@
+# --- Secrets: never commit -------------------------------------------------
+.env
+.env.local
+*.key
+*.pem
+
+# --- Data & artefacts ------------------------------------------------------
+data/raw/*.parquet
+data/cache/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+*.log
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+
+# --- OS / editor -----------------------------------------------------------
+.DS_Store
+.vscode/
+.idea/
