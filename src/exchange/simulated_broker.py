@@ -35,6 +35,7 @@ apart. Switching back to a real exchange is a one-line change.
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -67,6 +68,13 @@ class SimulatedBroker:
         self.market = market or BybitPublicClient()
         self.config = config
         self.timeframe = timeframe
+        #: Wall-clock of the last stop/target settlement. The executor calls
+        #: wallet_equity() and position() several times per cycle, and each
+        #: settlement refetches candles - four to six network round trips per
+        #: poll, and a log nobody can read. Settling at most once per
+        #: `settle_interval` seconds collapses that to one.
+        self._last_settled = 0.0
+        self.settle_interval = 10.0
 
         state = self.repository.get_state(STATE_KEY)
         if state is None:
@@ -163,6 +171,11 @@ class SimulatedBroker:
         """
         if not self.state["direction"] or not self.state["opened_at"]:
             return
+
+        now = time.monotonic()
+        if now - self._last_settled < self.settle_interval:
+            return
+        self._last_settled = now
 
         try:
             candles = load_ohlcv(self.timeframe, refresh=True)

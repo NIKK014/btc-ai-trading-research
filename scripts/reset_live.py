@@ -44,7 +44,7 @@ def main() -> int:
 
     if LOCK_FILE.exists():
         print(f"  WARNING: a trading loop may still be running (lock: {LOCK_FILE}).")
-        print("  Stop it first:  pkill -f 'python main.py'\n")
+        print("  Stop it first:  pkill -f 'main.py'\n")
 
     if not args.yes and input("  Proceed? [y/N] ").strip().lower() not in {"y", "yes"}:
         print("  Aborted. Nothing changed.")

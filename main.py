@@ -69,7 +69,10 @@ def acquire_lock() -> bool:
         else:
             logger.error(
                 "Another trading loop is already running (PID %s). Refusing to "
-                "start a second one.\n  Stop it with:  pkill -f 'python main.py'",
+                "start a second one.\n  Stop it with:  pkill -f 'main.py'\n"
+                "  (Match on 'main.py', not 'python main.py' - on macOS the "
+                "interpreter is\n   named 'Python' with a capital P, and pkill -f "
+                "is case-sensitive.)",
                 existing,
             )
             return False
@@ -91,6 +94,20 @@ def handle_shutdown(signum, frame) -> None:
     global RUNNING
     logger.info("Shutdown requested; finishing the current cycle.")
     RUNNING = False
+
+
+def interruptible_sleep(seconds: int) -> None:
+    """Sleep in one-second slices so a shutdown signal is acted on promptly.
+
+    A plain time.sleep(poll) means the process ignores SIGTERM for up to a
+    full poll interval. `pkill` then appears not to have worked, which invites
+    starting a second loop on top of the first - the exact race the PID lock
+    exists to prevent.
+    """
+    for _ in range(max(int(seconds), 0)):
+        if not RUNNING:
+            return
+        time.sleep(1)
 
 
 def load_strategy(name: str):
@@ -174,12 +191,12 @@ def main() -> int:
         try:
             candles = load_ohlcv(timeframe, refresh=True)
             if candles.empty:
-                time.sleep(args.poll)
+                interruptible_sleep(args.poll)
                 continue
 
             latest = candles.index[-1]
             if last_candle is not None and latest == last_candle and not args.once:
-                time.sleep(args.poll)
+                interruptible_sleep(args.poll)
                 continue
             last_candle = latest
 
@@ -265,7 +282,7 @@ def main() -> int:
 
         if args.once:
             break
-        time.sleep(args.poll)
+        interruptible_sleep(args.poll)
 
     release_lock()
     logger.info("Live loop stopped. Open positions retain their exchange-side stop and target.")

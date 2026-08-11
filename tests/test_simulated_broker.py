@@ -288,3 +288,34 @@ def test_the_executor_drives_the_simulator_unchanged(tmp_path, monkeypatch):
     assert plan is not None
     assert broker.position()["direction"] == 1
     assert repository.open_trade() is not None
+
+
+def test_settlement_is_throttled_between_calls(broker, monkeypatch):
+    """The executor calls wallet_equity() and position() several times per
+    cycle. Refetching candles on each one means four to six network round
+    trips per poll and an unreadable log."""
+    calls = {"n": 0}
+
+    def counting_loader(*args, **kwargs):
+        calls["n"] += 1
+        return candles([[60_000, 60_100, 59_900, 60_000]])
+
+    broker.place_market_order("BTCUSDT", 1, 0.1, stop_loss=58_000, take_profit=64_000)
+    monkeypatch.setattr("src.exchange.simulated_broker.load_ohlcv", counting_loader)
+
+    for _ in range(5):
+        broker.position()
+        broker.wallet_equity()
+
+    assert calls["n"] == 1, f"expected one settlement, got {calls['n']}"
+
+
+def test_throttle_expires_so_stops_still_fire(broker, monkeypatch):
+    """Throttling must delay settlement, never prevent it."""
+    broker.place_market_order("BTCUSDT", 1, 0.1, stop_loss=58_000, take_profit=64_000)
+    broker.position()
+
+    broker._last_settled = 0.0  # simulate the interval elapsing
+    set_candles(monkeypatch, [[60_000, 61_000, 57_500, 61_000]])
+
+    assert broker.position()["direction"] == 0, "the stop must still fire"

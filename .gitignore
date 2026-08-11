@@ -8,9 +8,14 @@
 data/raw/*.parquet
 data/cache/
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.sqlite
 data/*.sqlite3
 *.log
+
+# FUSE leaves these behind for files deleted while still open. Junk.
+.fuse_hidden*
 
 # --- Python ----------------------------------------------------------------
 __pycache__/
