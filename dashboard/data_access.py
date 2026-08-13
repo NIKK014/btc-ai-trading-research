@@ -108,18 +108,63 @@ def load_live_summary() -> Dict[str, Any]:
     return summary
 
 
+# Bybit blocks requests from datacenter IP ranges in restricted jurisdictions.
+# That is invisible on a laptop and total on a cloud host: the deployed
+# dashboard runs in a US datacenter, where every api.bybit.com call is refused.
+# Coinbase is the fallback because it is US-domiciled and unrestricted.
+#
+# BTC-USD spot is not the same instrument as the BTCUSDT perpetual the research
+# uses - the two normally sit within about 0.1% of each other, which is fine for
+# a context chart and would not be fine for a backtest. Nothing downstream of
+# this function feeds the research; it draws a picture.
+COINBASE = "https://api.exchange.coinbase.com"
+COINBASE_GRANULARITY = {"15m": 900, "1h": 3600, "4h": 14400}
+
+
+def _coinbase_price() -> Optional[float]:
+    import requests
+
+    response = requests.get(f"{COINBASE}/products/BTC-USD/ticker", timeout=6)
+    response.raise_for_status()
+    return float(response.json()["price"])
+
+
+def _coinbase_candles(timeframe: str, bars: int) -> pd.DataFrame:
+    import requests
+
+    granularity = COINBASE_GRANULARITY.get(timeframe, 14400)
+    response = requests.get(
+        f"{COINBASE}/products/BTC-USD/candles",
+        params={"granularity": granularity},
+        timeout=8,
+    )
+    response.raise_for_status()
+
+    # Coinbase returns [time, low, high, open, close, volume], newest first.
+    rows = response.json()
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows, columns=["time", "low", "high", "open", "close", "volume"])
+    frame["timestamp"] = pd.to_datetime(frame["time"], unit="s", utc=True)
+    frame = frame.set_index("timestamp").sort_index()
+    return frame[["open", "high", "low", "close", "volume"]].astype(float).tail(bars)
+
+
 @st.cache_data(ttl=10)
 def load_live_price(symbol: str = DATA.symbol) -> Optional[float]:
     """Current spot price, for marking an open position to market.
 
     The candle cache only advances when a 4h candle closes, so marking against
-    it can be four hours stale - useless for watching a live position. This is
-    the one place the dashboard touches the network, with a short timeout and
-    a fallback to the last close, so a slow or failed request degrades to the
-    old behaviour rather than stalling the page.
+    it can be four hours stale - useless for watching a live position. Bybit
+    first because it is the instrument actually traded; Coinbase when Bybit is
+    unreachable, which is the normal case on the deployed copy.
     """
     try:
         return BybitPublicClient(timeout=5, max_retries=1).get_last_price(symbol)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return _coinbase_price()
     except Exception:  # noqa: BLE001
         return None
 
@@ -133,20 +178,35 @@ def load_recent_prices(timeframe: str = "4h", bars: int = 200) -> pd.DataFrame:
     history back to 2020 - several hundred requests. That is right for a
     research machine and wrong for a web page, where it would hang the first
     visitor for minutes. A deployed copy has no parquet (too large for Git), so
-    it takes the second branch and fetches just the window it needs.
+    it takes a network branch and fetches just the window it needs.
+
+    The frame carries its origin in ``.attrs["source"]`` so the page can say
+    where the picture came from instead of implying it is the traded book.
     """
     try:
         if cache_path(timeframe, DATA.symbol, DATA).exists():
             cached = load_ohlcv(timeframe)
             if not cached.empty:
-                return cached.tail(bars)
+                frame = cached.tail(bars)
+                frame.attrs["source"] = "cache"
+                return frame
     except Exception:  # noqa: BLE001
         pass
 
     try:
         hours = {"15m": 0.25, "1h": 1.0, "4h": 4.0}.get(timeframe, 4.0) * bars
         start = pd.Timestamp.utcnow() - pd.Timedelta(hours=hours * 1.2)
-        return fetch_ohlcv(timeframe, start).tail(bars)
+        frame = fetch_ohlcv(timeframe, start).tail(bars)
+        if not frame.empty:
+            frame.attrs["source"] = "bybit"
+            return frame
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        frame = _coinbase_candles(timeframe, bars)
+        frame.attrs["source"] = "coinbase"
+        return frame
     except Exception:  # noqa: BLE001
         return pd.DataFrame()
 

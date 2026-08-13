@@ -224,6 +224,14 @@ def render_live() -> None:
     )
     st.plotly_chart(figure, use_container_width=True)
 
+    if prices.attrs.get("source") == "coinbase":
+        st.caption(
+            "Chart: Coinbase BTC-USD spot. Bybit refuses requests from datacenter "
+            "IPs, so the published copy cannot reach the venue the research used. "
+            "The two track each other closely, but this chart is context only - "
+            "every backtest on this site was computed from Bybit BTCUSDT data."
+        )
+
     if not has_local_trading_data():
         st.info(
             "**This is the published copy of the dashboard.** The chart above is live "

@@ -432,3 +432,58 @@ def test_venue_price_failure_falls_back_to_the_signal_price(executor):
 
     assert plan is not None, "a ticker outage must not stop trading"
     assert plan.entry_price == pytest.approx(60_000.0)
+
+
+# ---------------------------------------------------------------------------
+# Deployed dashboard: price fallback
+# ---------------------------------------------------------------------------
+
+
+def test_coinbase_candles_are_parsed_into_ascending_ohlc():
+    """Coinbase's column order is not the obvious one.
+
+    It returns ``[time, low, high, open, close, volume]`` - low and high before
+    open and close - newest row first. Reading it positionally as OHLCV silently
+    swaps the wicks for the body and draws a plausible, wrong candlestick. This
+    fallback only runs on the deployed copy, where nobody would be watching.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import dashboard.data_access as da
+
+    # time, low, high, open, close, volume - newest first, as the API sends it.
+    payload = [
+        [1_755_014_400, 100.0, 400.0, 200.0, 300.0, 9.0],
+        [1_755_000_000, 10.0, 40.0, 20.0, 30.0, 1.0],
+    ]
+    response = MagicMock()
+    response.json.return_value = payload
+    response.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=response):
+        frame = da._coinbase_candles("4h", 200)
+
+    assert list(frame.columns) == ["open", "high", "low", "close", "volume"]
+    assert frame.index.is_monotonic_increasing
+    assert str(frame.index.tz) == "UTC"
+
+    oldest = frame.iloc[0]
+    assert (oldest["open"], oldest["high"], oldest["low"], oldest["close"]) == (20.0, 40.0, 10.0, 30.0)
+    # The invariant that catches a positional misread.
+    assert (frame["high"] >= frame[["open", "close"]].max(axis=1)).all()
+    assert (frame["low"] <= frame[["open", "close"]].min(axis=1)).all()
+
+
+def test_live_price_falls_back_when_the_primary_venue_refuses():
+    """Bybit blocks datacenter IPs, so on the deployed copy it always fails."""
+    from unittest.mock import MagicMock, patch
+
+    import dashboard.data_access as da
+
+    response = MagicMock()
+    response.json.return_value = {"price": "63999.5"}
+    response.raise_for_status.return_value = None
+
+    with patch.object(da, "BybitPublicClient", side_effect=RuntimeError("geoblocked")), \
+            patch("requests.get", return_value=response):
+        assert da.load_live_price.__wrapped__("BTCUSDT") == 63999.5
