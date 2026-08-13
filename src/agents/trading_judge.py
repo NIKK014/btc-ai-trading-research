@@ -1,26 +1,17 @@
-"""The LLM trading judge - System C.
+"""The LLM trading judge.
 
-Design constraints, in order of importance.
+Decides direction only. Position size, stops and the daily loss limit are
+computed downstream by the risk manager - nothing that can hallucinate is
+allowed to size a position.
 
-**The judge decides direction, never exposure.** Position size, stop distance
-and the daily loss limit are computed by the deterministic risk manager
-downstream and are shown to the judge as fixed facts. An LLM that could size
-its own positions would be one hallucination away from a catastrophic trade,
-and no amount of prompt engineering makes that acceptable.
+The prompt contains no dates and no absolute prices. An LLM has read a great
+deal of Bitcoin history, so a date or price level invites it to recall what
+happened next: look-ahead bias through model weights, invisible to any
+pandas-level control. See MarketSnapshot.
 
-**The prompt contains no dates and no absolute prices.** See
-:class:`~src.agents.schema.MarketSnapshot`.
-
-**Every response is cached on a hash of the prompt.** Re-running a backtest
-then costs nothing and returns identical results, which makes the experiment
-reproducible and means a live demo cannot be broken by an API outage. The
-cache is a plain JSON file so it can be inspected, diffed and committed.
-
-**The judge is only consulted where a trade would actually happen.** Calling
-it on every candle would be thousands of requests for decisions that are
-almost all "no signal, do nothing". Consulting it only at entry decisions
-reduces a 13,000-bar backtest to a few hundred calls - a couple of minutes and
-a few cents.
+Responses are cached on a hash of the prompt, and the judge is consulted only
+where a trade would actually open - 127 calls on the test period rather than
+13,580.
 """
 
 from __future__ import annotations

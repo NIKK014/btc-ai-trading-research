@@ -1,21 +1,15 @@
 """The ML filter - System B.
 
-System B must trade the **same opportunity set** as System A, with exactly one
-thing changed: each signal now needs the model's agreement to be acted on. If
-the model were allowed to generate its own entries, A and B would be trading
-different markets and the comparison would answer nothing.
-
-So the rule is deliberately narrow:
-
     Take System A's signal only if the model predicts the same direction with
-    probability at least ``threshold``. Otherwise stand aside.
+    probability at least `threshold`. Otherwise stand aside.
 
-Two consequences to keep in view when reading the results. The filter can only
-ever *remove* trades, so System B will always have a smaller sample and wider
-confidence intervals than System A. And removing trades mechanically changes
-win rate and drawdown even if the model has no skill at all - which is exactly
-why the comparison needs the deterministic-agreement control rather than a
-side-by-side of two point estimates.
+Deliberately narrow. If the model generated its own entries, A and B would be
+trading different markets and the comparison would answer nothing.
+
+Two consequences when reading the results: the filter can only remove trades,
+so System B always has a smaller sample and wider intervals; and removing
+trades changes win rate and drawdown even if the model has no skill, which is
+why the comparison needs a control arm.
 """
 
 from __future__ import annotations
@@ -25,7 +19,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from config.settings import ML, MLConfig
+from config.settings import ML
 from src.models.train import TrainedModel
 from src.utils.logging_setup import get_logger
 
@@ -90,31 +84,16 @@ def apply_ml_filter(
     Args:
         signals: System A's desired direction per bar.
         predictions: Output of :func:`predictions_frame`.
-        threshold: Minimum probability the model must assign to the strategy's
-            direction.
-        require_agreement: If False, only the probability threshold applies -
-            an ablation separating "the model agreed" from "the model was
-            confident".
-        mode: ``"entry"`` gates only the decision to open a position and then
-            lets the strategy manage it; ``"per_bar"`` requires the model's
-            approval on every single bar the position is held.
+        threshold: Minimum probability the model must assign to the direction.
+        require_agreement: If False, only the probability threshold applies.
+        mode: ``"entry"`` gates the decision to open and then lets the strategy
+            manage the position; ``"per_bar"`` requires approval on every bar.
 
-    Why ``entry`` is the default
-    ----------------------------
-    Strategy signals are a *persistent state*, not a stream of independent
-    decisions. Requiring the model's approval on every bar does not select
-    better trades - it shreds one good position into a dozen fragments,
-    paying a round-trip fee on each and destroying the trend-following premise
-    the strategy depends on. Measured on this project's data, ``per_bar``
-    filtering cut exposure from 51% to 11% while leaving the trade count
-    almost unchanged: it was chopping positions up, not filtering them out.
-
-    ``entry`` mode asks the question the research is actually about: *given
-    that the rules want to open a trade here, does the model agree it is worth
-    taking?* Once a position is open, the strategy's own exit logic governs.
-
-    Returns:
-        The filtered signal series, aligned to ``signals``.
+    ``entry`` is the default because strategy signals are a persistent state,
+    not independent decisions. Requiring approval every bar does not select
+    better trades, it shreds one position into fragments that each pay a
+    round-trip fee. Measured here it cut exposure from 51% to 11% while leaving
+    the trade count almost unchanged.
     """
     if mode not in {"entry", "per_bar"}:
         raise ValueError(f"Unknown filter mode {mode!r}")
@@ -191,22 +170,6 @@ def filter_diagnostics(original: pd.Series, filtered: pd.Series) -> Dict[str, fl
             1.0 - ((filtered == -1).sum() / max((original == -1).sum(), 1))
         ),
     }
-
-
-def deterministic_agreement_filter(
-    signals: pd.Series,
-    predictions: pd.DataFrame,
-    threshold: float = ML.confidence_threshold,
-) -> pd.Series:
-    """The control arm for the LLM experiment.
-
-    A four-line rule: trade only when the strategy and the model agree, above
-    a confidence threshold. The LLM judge receives the same information and is
-    free to do something more sophisticated - so if System C does not beat
-    this, the honest conclusion is that the LLM added nothing a simple rule
-    could not.
-    """
-    return apply_ml_filter(signals, predictions, threshold, require_agreement=True)
 
 
 def sweep_threshold(

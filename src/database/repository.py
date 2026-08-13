@@ -1,20 +1,13 @@
 """SQLite persistence.
 
-Deliberately plain SQL over a small schema. An ORM would add a dependency and
-a layer of indirection for six tables that never change shape.
+Plain SQL over six tables that never change shape; an ORM would add a
+dependency and a layer of indirection for no benefit.
 
-Concurrency
------------
-The live trading loop writes; the Streamlit dashboard reads. WAL mode is
-enabled so a reader never blocks the writer and the dashboard cannot stall the
-trader mid-order.
+The trading loop writes and the dashboard reads, so WAL mode is used where the
+filesystem supports it and a slower journal mode where it does not.
 
-Everything is stored
---------------------
-Every decision - including the ones that resulted in no trade - is recorded
-with the full inputs that produced it. Logging only the trades would make it
-impossible to answer "why did it stay flat all Tuesday?", which is exactly the
-question that gets asked in a presentation.
+Every decision is stored, including the ones that produced no trade - a log of
+only trades cannot answer "why was it flat all Tuesday?".
 """
 
 from __future__ import annotations
@@ -23,7 +16,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, Optional
 
 import pandas as pd
 
@@ -297,13 +290,6 @@ class Repository:
         if not frame.empty:
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
             frame = frame.set_index("timestamp")
-        return frame
-
-    def backtest_results(self) -> pd.DataFrame:
-        frame = self._query("SELECT * FROM backtests ORDER BY run_at DESC")
-        if not frame.empty:
-            expanded = pd.json_normalize(frame["metrics"].map(json.loads))
-            frame = pd.concat([frame.drop(columns=["metrics"]), expanded], axis=1)
         return frame
 
     def summary(self) -> Dict[str, Any]:

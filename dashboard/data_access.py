@@ -14,17 +14,14 @@ run yet is useless during a presentation.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
 import streamlit as st
 
 from config.settings import DATA, PATHS
-from src.backtesting.engine import BacktestResult, run_backtest
-from src.backtesting.metrics import compute_metrics
-from src.backtesting.runner import VALIDATION, get_split
-from src.data.loader import load_ohlcv
+from src.data.loader import cache_path, fetch_ohlcv, load_ohlcv
+from src.data.public_client import BybitPublicClient
 from src.database.repository import Repository
 from src.strategies.base import build, registry
 
@@ -111,13 +108,59 @@ def load_live_summary() -> Dict[str, Any]:
     return summary
 
 
+@st.cache_data(ttl=10)
+def load_live_price(symbol: str = DATA.symbol) -> Optional[float]:
+    """Current spot price, for marking an open position to market.
+
+    The candle cache only advances when a 4h candle closes, so marking against
+    it can be four hours stale - useless for watching a live position. This is
+    the one place the dashboard touches the network, with a short timeout and
+    a fallback to the last close, so a slow or failed request degrades to the
+    old behaviour rather than stalling the page.
+    """
+    try:
+        return BybitPublicClient(timeout=5, max_retries=1).get_last_price(symbol)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @st.cache_data(ttl=LIVE_TTL)
 def load_recent_prices(timeframe: str = "4h", bars: int = 200) -> pd.DataFrame:
-    """Recent candles from the local cache. Never hits the network."""
+    """Recent candles: from the parquet cache locally, from the API when deployed.
+
+    The cache is checked by path rather than by calling ``load_ohlcv`` blind,
+    because ``load_ohlcv`` responds to a missing cache by downloading the full
+    history back to 2020 - several hundred requests. That is right for a
+    research machine and wrong for a web page, where it would hang the first
+    visitor for minutes. A deployed copy has no parquet (too large for Git), so
+    it takes the second branch and fetches just the window it needs.
+    """
     try:
-        return load_ohlcv(timeframe).tail(bars)
+        if cache_path(timeframe, DATA.symbol, DATA).exists():
+            cached = load_ohlcv(timeframe)
+            if not cached.empty:
+                return cached.tail(bars)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        hours = {"15m": 0.25, "1h": 1.0, "4h": 4.0}.get(timeframe, 4.0) * bars
+        start = pd.Timestamp.utcnow() - pd.Timedelta(hours=hours * 1.2)
+        return fetch_ohlcv(timeframe, start).tail(bars)
     except Exception:  # noqa: BLE001
         return pd.DataFrame()
+
+
+def has_local_trading_data() -> bool:
+    """Whether this is a research machine or the published web copy.
+
+    Keyed on the parquet cache, not the database. The database is created the
+    moment anything reads it, so testing for that file would answer "yes"
+    everywhere - including on the deployed site, three lines after Streamlit
+    itself created it. The 14MB price cache is never in Git, so its presence
+    is the honest signal.
+    """
+    return any(cache_path(tf, DATA.symbol, DATA).exists() for tf in DATA.timeframes)
 
 
 # ---------------------------------------------------------------------------
@@ -142,44 +185,6 @@ def _tuned_strategy(name: str = "ema_rsi_trend"):
     return strategy, tuned.get("timeframe", "4h")
 
 
-@st.cache_data(ttl=RESEARCH_TTL)
-def validation_equity_curves(
-    strategy_name: str = "ema_rsi_trend",
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """Equity curves for the tuned strategy and buy-and-hold, on validation.
-
-    Recomputed rather than stored so it always reflects the current
-    configuration. Costs well under a second on 4h data.
-    """
-    strategy, timeframe = _tuned_strategy(strategy_name)
-    start, end = get_split(VALIDATION)
-    ohlcv = load_ohlcv(timeframe, start=start, end=end)
-    if ohlcv.empty:
-        return pd.DataFrame(), {}
-
-    strategy_result = run_backtest(strategy.run(ohlcv))
-
-    benchmark = build("buy_and_hold")
-    benchmark_result = run_backtest(
-        benchmark.run(ohlcv), use_stops=False, sizing="full_notional", enforce_daily_limit=False
-    )
-
-    curves = pd.DataFrame(
-        {
-            strategy.name: strategy_result.equity,
-            "buy_and_hold": benchmark_result.equity,
-        }
-    )
-    context = {
-        "timeframe": timeframe,
-        "strategy": strategy.name,
-        "params": strategy.params.label(),
-        "strategy_metrics": compute_metrics(strategy_result, timeframe),
-        "benchmark_metrics": compute_metrics(benchmark_result, timeframe),
-        "trades": strategy_result.trades,
-        "result": strategy_result,
-    }
-    return curves, context
 
 
 @st.cache_data(ttl=RESEARCH_TTL)
@@ -194,6 +199,10 @@ def label_balance_table() -> pd.DataFrame:
         ("Fixed 0.5%", LabelConfig(mode="fixed", fixed_pct=0.005)),
     ):
         for timeframe in DATA.timeframes:
+            # Same trap as load_recent_prices: no parquet means load_ohlcv
+            # would download six years of history to fill in one table.
+            if not cache_path(timeframe, DATA.symbol, DATA).exists():
+                continue
             try:
                 frame = load_ohlcv(timeframe)
             except Exception:  # noqa: BLE001
@@ -214,3 +223,44 @@ def label_balance_table() -> pd.DataFrame:
                     }
                 )
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=LIVE_TTL)
+def open_position_summary() -> Dict[str, Any]:
+    """The live position marked against the current spot price."""
+    trades = load_trades()
+    if trades.empty:
+        return {}
+    open_trades = trades[trades["exit_time"].isna()]
+    if open_trades.empty:
+        return {}
+
+    trade = open_trades.iloc[0]
+    price = load_live_price()
+    if price is None:
+        prices = load_recent_prices()
+        price = float(prices["close"].iloc[-1]) if not prices.empty else None
+        stale = True
+    else:
+        stale = False
+    if price is None:
+        return {}
+
+    direction = int(trade["direction"])
+    size = float(trade["size"])
+    entry = float(trade["entry_price"])
+    pnl = direction * size * (price - entry)
+    notional = size * entry
+
+    return {
+        "direction": direction,
+        "size": size,
+        "entry_price": entry,
+        "mark_price": float(price),
+        "unrealised_pnl": float(pnl),
+        "unrealised_pct": float(pnl / notional) if notional else 0.0,
+        "stop_price": float(trade["stop_price"]) if pd.notna(trade["stop_price"]) else None,
+        "target_price": float(trade["target_price"]) if pd.notna(trade["target_price"]) else None,
+        "entry_time": trade["entry_time"],
+        "stale": stale,
+    }

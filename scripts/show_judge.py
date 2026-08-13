@@ -26,14 +26,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import pandas as pd  # noqa: E402
 
-from config.settings import LLM, ML, PATHS  # noqa: E402
+from config.settings import LLM, PATHS  # noqa: E402
 from src.agents.harness import agreement_stats, build_snapshots, describe_agreement  # noqa: E402
 from src.agents.schema import records_to_frame  # noqa: E402
 from src.agents.trading_judge import (  # noqa: E402
     SYSTEM_PROMPT,
     TradingJudge,
     build_snapshot,
-    entry_decision_points,
     prompt_for,
 )
 from src.backtesting.runner import TEST, apply_embargo, get_split  # noqa: E402

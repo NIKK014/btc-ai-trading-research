@@ -1,0 +1,13 @@
+# Presentation defaults. The deployed app is read-only, so the file-watcher and
+# usage stats are off; a hung watcher on a free-tier container is a needless way
+# to lose a demo.
+[server]
+fileWatcherType = "none"
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#3b82f6"

@@ -1,17 +1,11 @@
 """Paper-trading execution.
 
-Sits at the end of the pipeline:
+    signals -> ML filter -> judge -> RISK MANAGER -> executor -> broker
 
-    signals -> ML filter -> judge -> RISK MANAGER -> executor -> Bybit testnet
-
-The executor's job is narrow on purpose. It does not decide direction; by the
-time a decision reaches it, direction is settled. It asks the risk manager
-whether the trade is permitted and how large it should be, sends the order,
-and records everything.
-
-Every decision is persisted, including the ones that produced no trade. A log
-containing only trades cannot answer "why was it flat all day?", which is the
-first question anyone asks when watching a live demo.
+Narrow on purpose: by the time a decision reaches here, direction is settled.
+The executor asks the risk manager whether the trade is allowed and how large,
+sends the order, and records everything - including decisions that produced no
+trade.
 """
 
 from __future__ import annotations
@@ -19,9 +13,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-import pandas as pd
 
-from config.settings import BACKTEST, DATA, RISK, TRADING_MODE, assert_paper_mode
+from config.settings import BACKTEST, DATA, TRADING_MODE, assert_paper_mode
 from src.database.repository import Repository
 from src.exchange.bybit_client import BybitPaperClient
 from src.risk.manager import PositionPlan, RiskManager, RiskState

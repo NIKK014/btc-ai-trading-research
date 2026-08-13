@@ -1,35 +1,14 @@
-"""Signed Bybit V5 client - Bybit Testnet only.
+"""Signed Bybit V5 client - testnet only.
 
-Safety architecture
--------------------
-Four independent layers, any one of which prevents a real-money trade:
+Four independent safeguards, any one of which prevents a real-money trade:
 
-1. **The production host is not in this codebase.** This module imports
-   :data:`~config.settings.BYBIT_PAPER_TRADE_URL` and has no other host. There
-   is no string a typo could turn into the production endpoint, and a test
-   enforces that no module outside the read-only market-data client mentions
-   one.
-2. **The host is a constant, not an environment variable.** A malformed
-   ``.env`` cannot redirect order flow.
-3. **:func:`assert_paper_mode` runs in the constructor.** The client cannot be
-   built unless ``TRADING_MODE`` is a paper mode.
-4. **Every order re-checks the base URL immediately before sending.** Cheap,
-   and it survives refactors that move code around.
+1. The production host does not appear in this codebase. A test enforces it.
+2. The paper host is a module constant, not an environment variable.
+3. assert_paper_mode() runs in the constructor.
+4. Every request re-checks the base URL immediately before sending.
 
-On top of that, testnet credentials are issued by an entirely separate system
-and are not recognised on mainnet at all. Testnet balances are not
-convertible to anything: there is no mechanism by which an order placed here
-could touch real money.
-
-Why testnet rather than Demo Trading: Bybit EU cannot offer perpetual futures
-under MiCA, and this research requires the ability to go short. Testnet
-provides linear perpetuals with faucet-funded balances.
-
-Caveat worth stating in the write-up: testnet runs its own order book, so its
-prices drift from the real market. Signals are computed from mainnet history
-while orders execute against testnet's book, which means the live run
-demonstrates that the pipeline works end to end - it does not produce
-meaningful P&L.
+Testnet credentials are not recognised on mainnet either, so two independent
+systems would both have to fail.
 """
 
 from __future__ import annotations

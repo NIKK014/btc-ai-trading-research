@@ -20,7 +20,7 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Optional
 
 import pandas as pd

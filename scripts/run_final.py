@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import pandas as pd  # noqa: E402
 
-from config.settings import METRICS, ML, PATHS, SPLIT  # noqa: E402
+from config.settings import METRICS, PATHS, SPLIT  # noqa: E402
 from src.agents.deterministic_judge import AlwaysAgreeJudge  # noqa: E402
 from src.agents.harness import agreement_stats, build_snapshots, describe_agreement, run_arm  # noqa: E402
 from src.agents.trading_judge import TradingJudge  # noqa: E402
@@ -105,6 +105,16 @@ def main() -> int:
     parser.add_argument(
         "--yes", action="store_true", help="Skip the confirmation prompt."
     )
+    parser.add_argument(
+        "--end",
+        default=None,
+        help=(
+            "Cap the test window, e.g. 2026-08-11T08:00:01. Without this the test "
+            "runs to the last candle on disk, so a later re-run silently scores a "
+            "longer period and the numbers move. Pass the original end to "
+            "reproduce a published run exactly."
+        ),
+    )
     args = parser.parse_args()
 
     PATHS.ensure()
@@ -146,6 +156,8 @@ def main() -> int:
     )
 
     test_start, test_end = get_split(TEST, unlock_test=True)
+    if args.end:
+        test_end = args.end
     test_ohlcv = apply_embargo(load_ohlcv(timeframe, start=test_start, end=test_end))
     if test_ohlcv.empty:
         print("  No test data available.")

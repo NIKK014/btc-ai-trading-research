@@ -1,22 +1,16 @@
 """Strategy interface.
 
-A strategy converts an indicator-enriched OHLCV frame into a **desired
-position direction** at each bar close: ``+1`` long, ``-1`` short, ``0`` flat.
+A strategy turns an indicator frame into a desired position direction per bar:
++1 long, -1 short, 0 flat.
 
-Desired direction, not entry/exit events
-----------------------------------------
-Emitting a target state rather than discrete buy/sell events keeps the
-strategy layer stateless and pushes all execution concerns (when the order
-fills, whether a stop already closed the position, whether we are allowed to
-re-enter) into the backtest engine, where they belong. The same signal series
-is then replayed identically by the engine, the ML filter and the live trader,
-which is what makes Systems A, B and C directly comparable.
+Emitting a target state rather than buy/sell events keeps strategies stateless
+and pushes execution concerns - fill timing, stops, re-entry rules - into the
+engine. The same signal series is then replayed identically by the backtester,
+the ML filter and the live trader, which is what makes Systems A, B and C
+comparable.
 
-Causality
----------
-Signals at bar ``t`` may only reference indicator values at ``t`` or earlier.
-The engine fills the resulting order at the **open of bar t+1**, so no
-strategy can trade on a price it could not have seen.
+Signals at bar t may only use indicator values at t or earlier; the engine
+fills at the open of t+1.
 """
 
 from __future__ import annotations
@@ -198,18 +192,6 @@ def combine(long_condition: pd.Series, short_condition: pd.Series) -> pd.Series:
     return direction
 
 
-def hold_until_flip(direction: pd.Series) -> pd.Series:
-    """Hold the last non-flat direction until the opposite one appears.
-
-    Entry rules usually fire on a single bar (a crossover, a band touch). For
-    a trend strategy we want to *stay* in the position afterwards, so this
-    converts sparse entry events into a persistent target state. Uses forward
-    fill, which only ever propagates information forwards in time.
-    """
-    persistent = direction.astype("float64").replace(0.0, np.nan).ffill()
-    return persistent.fillna(0.0).astype("int8")
-
-
 def state_machine(
     entry_long: pd.Series,
     exit_long: pd.Series,
@@ -218,17 +200,14 @@ def state_machine(
 ) -> pd.Series:
     """Build a persistent position state from separate entry and exit rules.
 
-    Trend rules are naturally persistent - "fast EMA above slow EMA" is true
-    for as long as the trend lasts. Mean-reversion and breakout rules are not:
-    they fire on a single bar and need an explicit exit condition, otherwise
-    the position would be held until the opposite extreme occurred.
+    Trend rules are naturally persistent - "fast EMA above slow EMA" holds for
+    as long as the trend does. Mean-reversion and breakout rules fire on a
+    single bar and need an explicit exit, or the position would be held until
+    the opposite extreme.
 
-    Implemented as an explicit forward loop rather than a vectorised trick.
-    It is unambiguously causal (bar ``i`` only ever reads index ``i``), it is
-    readable, and at ~200k bars it costs well under a second.
-
-    A same-bar reversal is permitted: if the exit condition and the opposite
-    entry condition both fire, the position flips.
+    Written as a forward loop rather than a vectorised trick: bar ``i`` only
+    ever reads index ``i``, which makes it obviously causal, and 200k bars cost
+    well under a second. A same-bar reversal is allowed.
     """
     index = entry_long.index
     el = entry_long.fillna(False).to_numpy(dtype=bool)

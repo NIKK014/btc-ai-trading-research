@@ -1,11 +1,10 @@
 """Feature matrix construction.
 
-Only scale-free features are used. That constraint is doing real work: a model
-given raw BTC price learns that "price is 60,000" implies late 2024, which is
-memorisation of the calendar rather than of market structure, and it collapses
-the moment prices leave the training range. Every feature here is a ratio, a
-bounded oscillator, or a distance expressed as a fraction of price, so a
-feature vector from 2020 and one from 2026 are directly comparable.
+Only scale-free features. A model given raw BTC price learns that "price is
+60,000" implies late 2024 - memorising the calendar rather than market
+structure, and collapsing once prices leave the training range. Everything here
+is a ratio, a bounded oscillator, or a distance as a fraction of price, so a
+vector from 2020 and one from 2026 are comparable.
 """
 
 from __future__ import annotations
@@ -66,14 +65,6 @@ def build_dataset(
         100.0 * valid.mean(),
     )
     return features.loc[valid], labels.loc[valid, "label"], labels
-
-
-def feature_report(features: pd.DataFrame) -> pd.DataFrame:
-    """Distribution summary, used to sanity-check the matrix before training."""
-    described = features.describe().T[["mean", "std", "min", "max"]]
-    described["nan_share"] = features.isna().mean()
-    described["zero_variance"] = features.std() < 1e-12
-    return described.round(4)
 
 
 def correlated_pairs(features: pd.DataFrame, threshold: float = 0.95) -> List[Dict[str, float]]:

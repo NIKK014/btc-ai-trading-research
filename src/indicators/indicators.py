@@ -1,31 +1,18 @@
-"""Technical indicators, implemented directly in pandas.
+"""Technical indicators, written directly in pandas.
 
-Why hand-written
-----------------
-``pandas-ta`` has NumPy 2.x incompatibilities and an uncertain maintenance
-future; ``TA-Lib`` requires a C toolchain build that frequently fails on
-macOS. More importantly, every indicator here is a source of look-ahead bias
-if implemented carelessly, and a from-scratch implementation can be *proved*
-causal (see ``tests/test_indicators.py``).
+No pandas-ta or TA-Lib: pandas-ta has NumPy 2 incompatibilities, TA-Lib needs a
+C build, and a from-scratch version can be *proved* causal.
 
-Causality contract
-------------------
-**Every function in this module returns a value at index ``t`` computed only
-from data at or before ``t``.** There is no ``shift(-n)`` anywhere in this
-file, and there never should be. This is enforced by an automated test that
-truncates the input and checks that historical values are unchanged.
+Every function returns a value at index t computed only from data at or before
+t. There is no shift(-n) anywhere in this file, and a test asserts it by
+recomputing each indicator on truncated data.
 
-Deliberately excluded
----------------------
-* **Ichimoku** - the Chikou Span is the close shifted *backwards*, so reading
-  it at time ``t`` reads price at ``t + 26``. Direct look-ahead.
-* **Fibonacci retracements / classical support-resistance** - both are
-  normally derived from swing highs and lows over a window that includes
-  future bars.
+Deliberately excluded:
 
-Where a "levels" style feature is genuinely useful (the breakout strategy),
-:func:`donchian_high` and :func:`donchian_low` provide a strictly causal
-equivalent: the extreme of the *previous* N bars, excluding the current one.
+- Ichimoku - the Chikou Span is the close shifted *backwards* 26 periods, so
+  reading it at t reads price at t+26.
+- Fibonacci and classical support/resistance - derived from swing points found
+  with hindsight. donchian_high/low are the causal equivalent.
 """
 
 from __future__ import annotations

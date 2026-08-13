@@ -1,35 +1,17 @@
 """Triple-barrier labelling.
 
-The ML target asks: *within the next ``h`` candles, does price reach the
-upside barrier or the downside barrier first?* Three classes result - LONG,
-SHORT, or HOLD if neither is touched.
+For each bar: within the next h candles, does price reach the upper or lower
+barrier first? Three classes - LONG, SHORT, HOLD.
 
-Four design decisions, each of which would invalidate the results if made
-carelessly.
+Four decisions that matter:
 
-**Barriers are scaled by ATR, not a fixed percentage.** A fixed +/-0.5% over
-four candles means one hour on the 15m timeframe and sixteen hours on 4h. On
-15m that is a rare, meaningful move; on 4h it is noise that price crosses in
-both directions almost every time. A fixed threshold would therefore make the
-three timeframes incomparable, which is fatal to the central research
-question. Scaling by ATR makes the barrier mean the same thing everywhere:
-"one unit of current volatility". The fixed-percentage variant is retained so
-the assumption itself can be reported as a sensitivity check.
-
-**First touch is resolved chronologically.** The label is decided by whichever
-barrier is reached *first*, scanning bars forward one at a time - not by which
-one is reached at all, which would use knowledge of the whole window.
-
-**Same-candle ties are excluded, not guessed.** If a single candle's high
-breaches the upper barrier and its low breaches the lower one, OHLCV cannot
-say which came first. Those samples are labelled HOLD and flagged so they can
-be dropped from training. Guessing would inject a systematic bias whose
-direction we could not even predict.
-
-**The decision bar is excluded from its own window.** Bar ``t``'s label looks
-at bars ``t+1`` through ``t+h``. A model that could see bar ``t``'s own high
-and low would be trading on information that did not exist when the decision
-was made.
+- Barriers scale with ATR rather than a fixed percentage. Four candles is one
+  hour at 15m and sixteen at 4h, so a fixed threshold means something different
+  on each timeframe and breaks the timeframe comparison.
+- First touch is resolved by scanning forward one bar at a time.
+- If a single candle breaches both barriers the order is unknowable, so the
+  sample is labelled HOLD and dropped rather than guessed.
+- Bar t's label reads bars t+1..t+h. Its own high and low are excluded.
 """
 
 from __future__ import annotations
@@ -88,18 +70,10 @@ def triple_barrier_labels(
         config: Horizon, barrier mode and multiples.
 
     Returns:
-        DataFrame indexed like ``frame`` with columns:
-
-        ``label``
-            ``1`` LONG, ``-1`` SHORT, ``0`` HOLD.
-        ``ambiguous``
-            True where both barriers were breached inside the same candle and
-            the ordering is unknowable.
-        ``bars_to_touch``
-            How many bars until the decisive touch, NaN if neither barrier was
-            reached.
-        ``upper_barrier`` / ``lower_barrier``
-            The levels used, for inspection and plotting.
+        A frame indexed like ``frame`` with ``label`` (1 LONG, -1 SHORT,
+        0 HOLD), ``ambiguous`` where both barriers fell in one candle,
+        ``incomplete`` for the trailing bars, ``bars_to_touch``, and the two
+        barrier levels for inspection.
     """
     horizon = config.horizon_bars
     if horizon < 1:

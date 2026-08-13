@@ -1,36 +1,15 @@
-"""Local simulated broker.
+"""Local paper broker.
 
-Why this exists
----------------
-Bybit's EU entity cannot offer perpetual futures under MiCA, and its API is
-restricted to registered API-broker integrations, so an ordinary EEA account
-cannot trade programmatically on either mainnet or testnet. Bybit's global
-testnet geo-redirects EEA users to the EU site, closing that route too.
+Bybit EU offers no perpetual futures under MiCA and restricts API access to
+registered brokers, so execution runs here instead. Fills use real BTC prices
+from the public feed with the backtester's exact fee, slippage and stop rules,
+which keeps live P&L comparable to the research results.
 
-Rather than compromise the research - dropping short trades would invalidate
-every backtest result in a falling market - execution moves behind a second
-implementation of the same interface.
+What it is not: a connection to an exchange. No order reaches a venue, and
+queue position, partial fills and liquidation are not modelled.
 
-What this is, and is not
-------------------------
-It **is** a broker that fills against *real* BTC prices from the public
-market-data feed, using exactly the fee, slippage and stop-resolution rules
-the backtester uses. Its P&L is therefore directly comparable to the research
-results.
-
-It is **not** a connection to an exchange. No order reaches a venue and no
-queue position, partial fill or liquidation is modelled. Assumed fills are
-optimistic in the way all paper trading is.
-
-Notably, this is *more* faithful to the research than Bybit testnet would have
-been: testnet runs its own thin order book whose price drifts far from the
-real market, so its P&L would have been meaningless.
-
-Interface compatibility
------------------------
-Mirrors :class:`~src.exchange.bybit_client.BybitPaperClient` method for
-method, so :class:`~src.exchange.executor.PaperExecutor` cannot tell them
-apart. Switching back to a real exchange is a one-line change.
+Exposes the same methods as BybitPaperClient, so PaperExecutor cannot tell the
+two apart.
 """
 
 from __future__ import annotations
@@ -156,19 +135,17 @@ class SimulatedBroker:
     # -- protective orders -------------------------------------------------
 
     def _settle_protective_orders(self) -> None:
-        """Fill a stop or target that was breached between polls.
+        """Fill a stop or target breached between polls.
 
-        The loop wakes every 30 seconds but price moves continuously, so a
-        stop can be breached and recovered before we ever look. Checking only
-        the spot price at poll time would silently miss those fills and
-        overstate performance.
+    The loop wakes every 30 seconds but price moves continuously, so a stop can
+    be hit and recovered before we look. Checking only the spot price at poll
+    time would miss those fills and overstate performance.
 
-        Instead the candles since entry are replayed and their **highs and
-        lows** examined, using the backtester's rules: a gap through the stop
-        fills at the open, a favourable gap through the target still fills at
-        the target, and a candle containing both fills at the stop because
-        OHLCV cannot say which came first.
-        """
+    Instead the candles since entry are replayed and their highs and lows
+    examined, using the backtester's rules: a gap through the stop fills at the
+    open, a favourable gap through the target still fills at the target, and a
+    candle containing both counts as a stop.
+    """
         if not self.state["direction"] or not self.state["opened_at"]:
             return
 

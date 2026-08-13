@@ -1,19 +1,16 @@
-"""The control arm.
+"""The control arms.
 
-Why this exists
----------------
-A judge that vetoes trades will change performance whether or not it
-understands anything. Filtering alone reshapes the return distribution, cuts
-the sample size and moves every metric. So "System C beat System B" is not
-evidence that the LLM reasoned well - it may only be evidence that fewer
-trades were taken.
+A judge that vetoes trades changes performance whether or not it understands
+anything - filtering alone reshapes the return distribution and shrinks the
+sample. So "System C beat System A" is not evidence of reasoning.
 
-The honest comparison is against a judge that is transparently *not*
-intelligent: four lines of arithmetic, given exactly the same inputs. If the
-LLM cannot beat this, the finding is that a language model added nothing a
-junior developer could not have written in a minute - which is a real,
-publishable result, and far more interesting than a vague claim of
-improvement.
+DeterministicJudge is the honest benchmark: four lines of arithmetic given the
+same inputs. If the LLM cannot beat it, the finding is that a language model
+added nothing a simple condition already did.
+
+AlwaysAgreeJudge approves everything and must reproduce System A exactly. It
+checks the harness itself - if routing signals through it changes them, every
+System C result is suspect.
 """
 
 from __future__ import annotations
@@ -136,19 +133,3 @@ class AlwaysAgreeJudge:
             )
             for timestamp, snapshot in snapshots
         ]
-
-
-def decisions_to_signals(records: Sequence[JudgeRecord], index) -> "pd.Series":
-    """Convert a decision log into an engine-compatible signal series.
-
-    Decisions are made at entry points only, so an approved decision persists
-    until the strategy itself stands down - the same "gate the entry, then let
-    it run" semantics used by the ML filter.
-    """
-    import pandas as pd
-
-    approved = {
-        pd.Timestamp(record.timestamp): DECISION_TO_SIGNAL[record.decision]
-        for record in records
-    }
-    return pd.Series(approved).reindex(index).fillna(0).astype("int8")

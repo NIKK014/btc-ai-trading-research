@@ -1,26 +1,17 @@
-"""Trading strategies, organised by methodology.
+"""Trading strategies, grouped by methodology.
 
-The experiment compares *methodologies* rather than individual indicators, so
-each strategy belongs to one of four families:
+The experiment compares methodologies rather than individual indicators:
 
-======================  ==========================================  ==================
-Methodology             Premise                                     Strategies
-======================  ==========================================  ==================
-trend                   Moves persist                               ema_rsi_trend,
-                                                                    macd_adx_trend
-momentum                Rate of change carries information          stochrsi_macd_momentum
-mean_reversion          Stretched price snaps back to a reference   rsi_bollinger_reversion,
-                                                                    vwap_stretch_reversion
-breakout                Ranges resolve violently                    donchian_volume_breakout,
-                                                                    bollinger_squeeze_breakout
-======================  ==========================================  ==================
+    trend           ema_rsi_trend, macd_adx_trend
+    momentum        stochrsi_macd_momentum
+    mean_reversion  rsi_bollinger_reversion, vwap_stretch_reversion
+    breakout        donchian_volume_breakout, bollinger_squeeze_breakout
+    benchmark       buy_and_hold
 
-Plus ``buy_and_hold``, the benchmark every result is judged against.
-
-The same indicator can appear in several families with opposite meaning - RSI
-below 30 confirms a downtrend in ``trend.py`` and signals a buy in
-``mean_reversion.py``. That is the point: the experiment tests whether the
-surrounding methodology, not the indicator, is what generates edge.
+The same indicator appears in several families with opposite meaning - RSI
+below 30 confirms a downtrend in trend.py and signals a buy in
+mean_reversion.py. That is the point: the test is whether the surrounding
+methodology generates edge, not the indicator.
 """
 
 from src.strategies.base import (
@@ -29,7 +20,6 @@ from src.strategies.base import (
     StrategyParams,
     build,
     combine,
-    hold_until_flip,
     registry,
     state_machine,
 )
@@ -40,7 +30,6 @@ __all__ = [
     "StrategyParams",
     "build",
     "combine",
-    "hold_until_flip",
     "registry",
     "state_machine",
 ]

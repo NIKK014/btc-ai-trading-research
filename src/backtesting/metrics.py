@@ -1,25 +1,22 @@
 """Performance metrics, eligibility gates and confidence intervals.
 
-Three principles shape this module.
+Three principles.
 
-**Profit is not the ranking criterion.** A strategy that made 300% with a 70%
-drawdown is not better than one that made 80% with a 15% drawdown, and a
-strategy that made 500% over four trades has told us nothing at all.
+Profit is not the ranking criterion. 300% with a 70% drawdown is not better
+than 80% with 15%, and 500% over four trades says nothing at all.
 
-**Selection uses one metric behind hard gates.** The composite score exists to
-make the leaderboard readable; it double-counts return by construction and is
-not a defensible basis for choosing a winner. Selection uses the primary
-metric, and any configuration failing a gate is disqualified outright.
+Selection uses one metric behind hard gates. The composite score is for making
+the leaderboard readable - it double-counts return by construction and is not a
+sound basis for choosing a winner.
 
-**Every headline number gets a confidence interval.** With a few hundred
-trades, the difference between two systems is usually inside the noise. Saying
-so is a result, not a failure - and it is the difference between an experiment
-and a demo.
+Every headline number gets a confidence interval. With a few hundred trades the
+difference between two systems is usually inside the noise, and saying so is a
+result rather than a failure.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -202,12 +199,11 @@ def check_gates(
 
     A configuration failing any gate is disqualified regardless of its score.
     This is what stops "three lucky trades, 900% return" topping the
-    leaderboard - the most common way a strategy backtest fools its author.
+    leaderboard.
 
-    Benchmarks are exempt. Buy-and-hold takes exactly one trade, which would
-    fail the minimum-trades gate - but it is the bar every strategy is measured
-    against, not a candidate for selection, so it must stay visible in the
-    leaderboard. :func:`select_winner` excludes it from being chosen.
+    Benchmarks are exempt - buy-and-hold takes one trade and would fail the
+    minimum-trades gate, but it is the bar everything is measured against.
+    :func:`select_winner` excludes it from being chosen.
 
     Returns:
         ``(eligible, reasons_for_failure)``.

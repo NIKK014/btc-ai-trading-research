@@ -13,17 +13,13 @@ from config.settings import LOG_LEVEL, PATHS
 def _silence_accelerate_matmul_warnings() -> None:
     """Suppress a known spurious NumPy warning on Apple silicon.
 
-    NumPy built against Apple's Accelerate BLAS emits
-    ``RuntimeWarning: divide by zero / overflow / invalid value encountered in
-    matmul`` for matrix multiplications larger than roughly 14x14, even when
-    the result is entirely correct. Accelerate leaves floating-point exception
-    flags set from its SIMD paths and NumPy reports them. The same code under
-    OpenBLAS produces no warnings and identical numbers.
+    NumPy built against Apple's Accelerate BLAS reports divide-by-zero,
+    overflow and invalid-value warnings for matmuls above roughly 14x14 even
+    when the result is correct - Accelerate leaves floating-point exception
+    flags set from its SIMD paths. The same code under OpenBLAS is silent and
+    produces identical numbers.
 
-    This filter is deliberately narrow - it matches only ``matmul`` - so
-    genuine numerical problems anywhere else still surface. Verified against a
-    Linux/OpenBLAS run: model scores match to three decimal places.
-
+    Matched narrowly on ``matmul`` so real numerical problems still surface.
     Tracking: numpy#28687, numpy#29820, scikit-learn#31395.
     """
     for message in (

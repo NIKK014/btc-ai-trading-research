@@ -1,13 +1,12 @@
 """Deterministic risk management.
 
-This module is downstream of every decision layer and upstream of every order.
-The strategy, the model and the LLM judge all decide **direction only**. What
-follows - how much, where the stop goes, whether we are allowed to trade at
-all - is arithmetic, and deliberately not delegated to anything that can
-hallucinate.
+Downstream of every decision layer and upstream of every order. The strategy,
+the model and the judge decide direction only; how much, where the stop goes
+and whether we may trade at all is arithmetic, deliberately not delegated to
+anything that can hallucinate.
 
-The same calculations run in the backtest engine and in live paper trading, so
-a position sized here matches the one the research produced.
+The same calculations run in the backtest and live, so a position sized here
+matches the one the research produced.
 """
 
 from __future__ import annotations

@@ -1,9 +1,11 @@
 """Structured input and output for the trading judge.
 
-The judge's output is validated against a Pydantic schema rather than parsed
-out of free text. Regex-parsing an LLM's prose is how a demo becomes a
-liability: the day it writes "I would lean long, though..." the parser either
+Output is validated against a Pydantic schema rather than parsed from prose.
+The day the model writes "I would lean long, though..." a regex parser either
 crashes or silently returns the wrong direction.
+
+MarketSnapshot deliberately carries no timestamp and no absolute price - see
+the note on its class.
 """
 
 from __future__ import annotations

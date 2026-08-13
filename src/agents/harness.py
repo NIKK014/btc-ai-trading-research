@@ -1,17 +1,14 @@
 """Comparison harness for Systems A, B and C.
 
-Every arm is routed through the same code path: identical strategy signals,
-identical snapshots, identical entry-gating. The only thing that varies is the
-object making the decision. That is what makes the comparison an experiment
-rather than three separately-tuned demos.
+Every arm runs through the same code: identical signals, identical snapshots,
+identical entry-gating. Only the object making the decision changes, which is
+what makes this an experiment rather than three separately-tuned demos.
 
-Arms
-----
-``A``            Rules only, no judge.
-``B``            Rules gated by the ML model's agreement.
-``C``            Rules gated by the LLM judge.
-``deterministic``  The control: four lines of arithmetic, same inputs as C.
-``always_agree``   A sanity arm that must reproduce A exactly.
+    A              rules only
+    B              rules gated by the ML model
+    C              rules gated by the LLM judge
+    always_agree   control - must reproduce A exactly
+    deterministic  control - four lines of arithmetic
 """
 
 from __future__ import annotations

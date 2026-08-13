@@ -123,8 +123,3 @@ class BybitPublicClient:
         if not tickers:
             raise BybitAPIError(f"No ticker returned for {symbol}")
         return float(tickers[0]["lastPrice"])
-
-    def get_server_time_ms(self) -> int:
-        """Bybit server time in milliseconds."""
-        result = self._get("/v5/market/time", {})
-        return int(result["timeNano"]) // 1_000_000

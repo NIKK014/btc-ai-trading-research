@@ -256,3 +256,33 @@ def test_metrics_and_regime_split_run_on_a_real_backtest(ohlcv):
         "1h",
     )
     assert list(split["period"]) == ["first_half", "second_half"]
+
+
+def test_sliced_segments_are_rebased_to_their_own_starting_equity(ohlcv):
+    """A sub-period's return must start from that sub-period's equity.
+
+    Regression test. ``slice`` originally carried the parent's
+    ``initial_capital`` into the slice, so the final segment reported the
+    cumulative return of the entire run. The regime split then produced a
+    "falling market" row identical to the full-period figure for every system,
+    which looks like a finding and is actually an arithmetic error.
+    """
+    from src.backtesting.engine import run_backtest
+    from src.backtesting.metrics import compute_metrics
+    from src.strategies.base import build
+
+    result = run_backtest(build("ema_rsi_trend").run(ohlcv))
+    whole = compute_metrics(result, "1h")
+
+    midpoint = ohlcv.index[len(ohlcv) // 2]
+    first = result.slice(ohlcv.index[0], midpoint)
+    second = result.slice(midpoint, ohlcv.index[-1])
+
+    # Each half is measured against the equity it opened with.
+    assert first.meta["initial_capital"] == pytest.approx(first.equity.iloc[0])
+    assert second.meta["initial_capital"] == pytest.approx(second.equity.iloc[0])
+
+    # The halves compound to the whole, which is the actual invariant.
+    a = compute_metrics(first, "1h")["total_return"]
+    b = compute_metrics(second, "1h")["total_return"]
+    assert (1 + a) * (1 + b) == pytest.approx(1 + whole["total_return"], rel=1e-9)

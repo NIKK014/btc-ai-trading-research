@@ -21,7 +21,7 @@ prepared frame is computed once per distinct spec and reused.
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,7 @@ from config.settings import BACKTEST, METRICS, RISK, BacktestConfig, MetricsConf
 from src.backtesting.engine import run_backtest
 from src.backtesting.metrics import build_leaderboard, compute_metrics
 from src.indicators.indicators import add_indicators
-from src.strategies.base import Strategy, StrategyParams
+from src.strategies.base import StrategyParams
 from src.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)

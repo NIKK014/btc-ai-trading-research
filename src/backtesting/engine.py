@@ -1,45 +1,22 @@
 """Event-driven backtest engine.
 
-This is the most correctness-critical module in the project: every number in
-the final comparison flows through it, and a silently wrong engine produces
-beautiful, meaningless results. It is therefore deliberately explicit rather
-than clever, and is verified in ``tests/test_engine.py`` against P&L computed
+Every number in the study flows through here, so it is written to be obvious
+rather than clever, and checked in tests/test_engine.py against P&L worked out
 by hand.
 
-Execution model
----------------
-For each bar, in this order:
+Per bar: fill pending orders at the open, check stop and target against the
+bar's high and low, mark to market at the close. A signal from bar t fills at
+the open of t+1 - never at the price that generated it.
 
-1. **Fill pending orders at the open.** A signal is produced on the close of
-   bar ``t`` and filled at the open of bar ``t+1``. Nothing is ever filled at
-   the price that generated it.
-2. **Check stop and target against the bar's high and low.**
-3. **Mark to market at the close.**
-
-Pessimistic assumptions, applied consistently
----------------------------------------------
-* **Same-bar ambiguity resolves against us.** If a bar's range contains both
-  the stop and the target, OHLCV cannot tell us which came first, so the stop
-  is assumed. Guessing the favourable outcome is how backtests lie.
-* **Gaps through the stop fill at the open**, not at the stop price - if price
-  gapped past your stop you did not get your stop.
-* **Gaps through the target fill at the target**, not at the better open.
-* **Slippage is applied against us** on every market order. Limit exits at the
-  target are assumed to fill without slippage.
-* **Taker fees on both sides**, because signals are acted on at market.
-
-Position sizing
----------------
-``risk`` mode sizes each position so that a stop-out costs exactly
-``risk_per_trade`` of current equity, which is what makes trades comparable
-across volatility regimes. ``full_notional`` deploys all equity and is used
-for the buy-and-hold benchmark.
+Where the data is ambiguous the assumption goes against us. A bar containing
+both stop and target counts as a stop; a gap through the stop fills at the
+open; a gap through the target still fills at the target.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -126,12 +103,21 @@ class BacktestResult:
             )
             trades = trades.loc[mask]
 
+        # Rebase: a sub-period's return must be measured from the equity it
+        # started with, not from the capital the whole run began with. Without
+        # this, the final segment reports the cumulative return of everything
+        # before it - so a "falling market" row silently restates the
+        # full-period number and the regime split says nothing at all.
         return BacktestResult(
             equity=equity,
             trades=trades.reset_index(drop=True),
             signals=self.signals.loc[start:end],
             position=self.position.loc[start:end],
-            meta={**self.meta, "sliced": (str(start), str(end))},
+            meta={
+                **self.meta,
+                "initial_capital": float(equity.iloc[0]),
+                "sliced": (str(start), str(end)),
+            },
         )
 
 

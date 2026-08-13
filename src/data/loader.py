@@ -93,7 +93,7 @@ def fetch_ohlcv(
     cursor = end_ms
     requests_made = 0
 
-    logger.info(
+    logger.debug(
         "Fetching %s %s from %s to %s",
         symbol,
         timeframe,
@@ -145,7 +145,7 @@ def fetch_ohlcv(
     if drop_unclosed:
         frame = drop_unclosed_candle(frame, timeframe)
 
-    logger.info(
+    logger.debug(
         "Fetched %d %s candles (%s -> %s) in %d requests",
         len(frame),
         timeframe,
@@ -208,7 +208,10 @@ def load_ohlcv(
 
     if path.exists():
         frame = pd.read_parquet(path)
-        logger.info("Loaded %d cached %s candles from %s", len(frame), timeframe, path.name)
+        # Debug, not info: the live loop reloads this every poll. Only events
+        # that change something - a new candle, a first download - deserve a
+        # line in a log a human is expected to read.
+        logger.debug("Loaded %d cached %s candles from %s", len(frame), timeframe, path.name)
         if refresh:
             frame = _extend_cache(frame, timeframe, symbol, config, path)
     else:

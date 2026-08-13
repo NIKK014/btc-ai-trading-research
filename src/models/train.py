@@ -18,7 +18,7 @@ Leakage controls, all of which are load-bearing:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
-    classification_report,
     confusion_matrix,
     f1_score,
 )

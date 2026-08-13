@@ -22,7 +22,7 @@ import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from config.settings import BACKTEST, DATA, METRICS, RISK, TRADING_MODE  # noqa: E402
+from config.settings import BACKTEST, DATA, TRADING_MODE  # noqa: E402
 from dashboard.data_access import (  # noqa: E402
     available_results,
     label_balance_table,
@@ -30,10 +30,12 @@ from dashboard.data_access import (  # noqa: E402
     load_equity_history,
     load_live_summary,
     load_recent_prices,
+    has_local_trading_data,
+    load_live_price,
     load_results_csv,
     load_trades,
     load_tuned_params,
-    validation_equity_curves,
+    open_position_summary,
 )
 
 st.set_page_config(
@@ -89,20 +91,72 @@ def render_header() -> None:
 
     banner, mode = st.columns([4, 1])
     with banner:
+        # An unset TRADING_MODE is the safe state, not a broken one: nothing can
+        # trade until it is set to a paper mode explicitly. The deployed copy
+        # never sets it, so it says so rather than printing an empty backtick.
         st.success(
             f"**PAPER TRADING ONLY** - mode `{TRADING_MODE}`. "
-            "This system cannot execute a trade with real funds.",
+            "This system cannot execute a trade with real funds."
+            if TRADING_MODE
+            else "**PAPER TRADING ONLY** - this published copy has no trading mode "
+            "configured, so it cannot place an order of any kind.",
             icon="🔒",
         )
     with mode:
         st.metric("Symbol", DATA.symbol)
 
-    columns = st.columns(5)
-    columns[0].metric("Equity", f"{equity:,.2f}", f"{equity - start:+,.2f}")
-    columns[1].metric("Return", pct(equity / start - 1) if start else "-")
+    # On the deployed copy there is no trading database, so these would all read
+    # back the untouched starting capital - technically true, quietly misleading.
+    if not has_local_trading_data():
+        live = load_live_price()
+        columns = st.columns(3)
+        columns[0].metric("BTC now", f"{live:,.1f}" if live else "-")
+        columns[1].metric("Best system, out-of-sample", "+1.6%", "Sharpe 0.22")
+        columns[2].metric("Buy and hold, same period", "-41.0%", "Sharpe -0.96")
+        return
+
+    position = open_position_summary()
+
+    columns = st.columns(6)
+    # Equity here is realised only. The open position's mark-to-market sits in
+    # its own metric so the two are never silently added together.
+    columns[0].metric("Equity (realised)", f"{equity:,.2f}", f"{equity - start:+,.2f}")
+    columns[1].metric("Return", pct(equity / start - 1, 2) if start else "-")
     columns[2].metric("Position", DIRECTION_LABEL.get(direction, "FLAT"))
-    columns[3].metric("Closed trades", int(summary.get("closed_trades", 0)))
-    columns[4].metric("Decisions logged", int(summary.get("decisions_logged", 0)))
+
+    if position:
+        columns[3].metric(
+            "Unrealised P&L",
+            f"{position['unrealised_pnl']:+,.2f}",
+            pct(position["unrealised_pct"], 2),
+        )
+        columns[4].metric(
+            "BTC now",
+            f"{position['mark_price']:,.1f}",
+            f"entry {position['entry_price']:,.1f}",
+            delta_color="off",
+        )
+    else:
+        columns[3].metric("Unrealised P&L", "-")
+        live = load_live_price()
+        columns[4].metric("BTC now", f"{live:,.1f}" if live else "-")
+
+    columns[5].metric("Decisions logged", int(summary.get("decisions_logged", 0)))
+
+    if position:
+        stop, target = position.get("stop_price"), position.get("target_price")
+        distance = ""
+        if stop and target and position["mark_price"]:
+            mark = position["mark_price"]
+            distance = (
+                f" &nbsp;·&nbsp; stop {stop:,.0f} ({abs(mark / stop - 1):.2%} away)"
+                f" &nbsp;·&nbsp; target {target:,.0f} ({abs(mark / target - 1):.2%} away)"
+            )
+        st.markdown(
+            f"**Open {DIRECTION_LABEL[position['direction']]}** {position['size']:.4f} BTC "
+            f"from {position['entry_time']:%Y-%m-%d %H:%M} UTC{distance}"
+            + ("  &nbsp;·&nbsp; *price feed unavailable, marked at last close*" if position["stale"] else "")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -117,11 +171,18 @@ def render_live() -> None:
         "slippage and stop rules as the backtester. No order reaches an exchange."
     )
 
+    local = has_local_trading_data()
     prices = load_recent_prices()
-    decisions = load_decisions()
+    decisions = load_decisions() if local else pd.DataFrame()
 
     if prices.empty:
-        placeholder("No price history cached yet.", "python scripts/fetch_data.py")
+        if local:
+            placeholder("No price history cached yet.", "python scripts/fetch_data.py")
+        else:
+            placeholder(
+                "The live price feed is not responding right now. The research results "
+                "in the other tabs are files, not live requests, so they are unaffected."
+            )
         return
 
     figure = go.Figure(
@@ -162,6 +223,18 @@ def render_live() -> None:
         showlegend=False,
     )
     st.plotly_chart(figure, use_container_width=True)
+
+    if not has_local_trading_data():
+        st.info(
+            "**This is the published copy of the dashboard.** The chart above is live "
+            "Bitcoin data, but the paper-trading loop runs on a local machine and its "
+            "database is not part of this deployment, so there are no positions or "
+            "decisions to show here. Everything the trader was built to test is in the "
+            "**Results**, **Machine learning** and **AI Judge** tabs - those are the "
+            "real, unmodified research outputs.",
+            icon="ℹ️",
+        )
+        return
 
     equity_history = load_equity_history()
     if len(equity_history) > 1:
@@ -215,160 +288,49 @@ def render_live() -> None:
     else:
         view = trades.copy()
         view["side"] = view["direction"].map(DIRECTION_LABEL)
+
+        # An unclosed trade has empty exit fields. Left raw, those blanks read
+        # as "zero P&L" rather than "still running" - the first thing anyone
+        # asks about. Label the status and mark the open position to market.
+        is_open = view["exit_time"].isna()
+        view["status"] = ["OPEN" if o else "closed" for o in is_open]
+
+        last_price = float(prices["close"].iloc[-1]) if not prices.empty else None
+        if last_price is not None:
+            unrealised = view["direction"] * view["size"] * (last_price - view["entry_price"])
+            view.loc[is_open, "pnl"] = unrealised[is_open]
+            view.loc[is_open, "exit_price"] = last_price
+
+        view["pnl"] = [
+            f"{v:+,.2f} (unrealised)" if o else (f"{v:+,.2f}" if pd.notna(v) else "-")
+            for v, o in zip(view["pnl"], is_open)
+        ]
+        view["exit_time"] = [
+            "still open" if o else (f"{t:%Y-%m-%d %H:%M}" if pd.notna(t) else "-")
+            for t, o in zip(view["exit_time"], is_open)
+        ]
+        view["exit_price"] = [
+            f"{v:,.1f} (mark)" if o else (f"{v:,.1f}" if pd.notna(v) else "-")
+            for v, o in zip(view["exit_price"], is_open)
+        ]
+        view["exit_reason"] = view["exit_reason"].fillna("-")
+        view["entry_time"] = view["entry_time"].map(
+            lambda t: f"{t:%Y-%m-%d %H:%M}" if pd.notna(t) else "-"
+        )
+
         columns = [
             c
-            for c in ["entry_time", "exit_time", "side", "entry_price", "exit_price", "size", "pnl", "exit_reason"]
+            for c in ["status", "entry_time", "exit_time", "side", "entry_price",
+                      "exit_price", "size", "pnl", "exit_reason"]
             if c in view.columns
         ]
         st.dataframe(view[columns].head(20), use_container_width=True, hide_index=True)
-
-
-# ---------------------------------------------------------------------------
-# Research tab
-# ---------------------------------------------------------------------------
-
-
-def render_research() -> None:
-    st.subheader("Question 1 - which methodology and timeframe?")
-    leaderboard = load_results_csv("leaderboard_validation.csv")
-
-    if leaderboard.empty:
-        placeholder("No leaderboard yet.", "python scripts/run_baseline.py")
-        return
-
-    st.caption(
-        "Ranked on the validation split only. Ineligible strategies stay visible rather "
-        f"than being deleted: gates are min {METRICS.min_trades} trades, "
-        f"max {METRICS.max_drawdown_limit:.0%} drawdown, profit factor above "
-        f"{METRICS.min_profit_factor}."
-    )
-
-    display = leaderboard.copy()
-    for column in ("total_return", "max_drawdown", "win_rate", "exposure", "fees_pct_of_capital"):
-        if column in display:
-            display[column] = display[column].map(lambda v: pct(v))
-    for column in ("sharpe", "sortino", "profit_factor", "score"):
-        if column in display:
-            display[column] = display[column].map(lambda v: num(v))
-
-    columns = [
-        c
-        for c in [
-            "rank", "strategy", "methodology", "timeframe", "n_trades", "total_return",
-            "sharpe", "sortino", "max_drawdown", "win_rate", "profit_factor",
-            "fees_pct_of_capital", "eligible",
-        ]
-        if c in display.columns
-    ]
-    st.dataframe(display[columns], use_container_width=True, hide_index=True, height=420)
-
-    st.markdown("---")
-    left, right = st.columns(2)
-
-    with left:
-        st.markdown("**Fee drag destroys short timeframes**")
-        strategies = leaderboard[leaderboard["methodology"] != "benchmark"]
-        by_timeframe = (
-            strategies.groupby("timeframe")
-            .agg(
-                median_trades=("n_trades", "median"),
-                median_fees=("fees_pct_of_capital", "median"),
-                median_return=("total_return", "median"),
-                eligible=("eligible", "sum"),
+        if is_open.any():
+            st.caption(
+                "An open trade shows its mark-to-market value at the latest close, not a "
+                "realised result. `entry_time` is wall-clock execution time; the decision "
+                "that caused it is keyed to the candle's open time, which is why they differ."
             )
-            .reindex([t for t in DATA.timeframes if t in strategies["timeframe"].values])
-        )
-        figure = go.Figure(
-            go.Bar(
-                x=by_timeframe.index,
-                y=by_timeframe["median_fees"] * 100,
-                marker_color=RED,
-                text=[f"{v:.0%}" for v in by_timeframe["median_fees"]],
-                textposition="outside",
-            )
-        )
-        figure.update_layout(
-            height=280,
-            margin=dict(l=0, r=0, t=10, b=0),
-            yaxis_title="Median fees paid (% of capital)",
-        )
-        st.plotly_chart(figure, use_container_width=True)
-        st.caption(
-            "Every strategy tested at 15m was destroyed by transaction costs. "
-            "Not one configuration passed the eligibility gates."
-        )
-
-    with right:
-        st.markdown("**Tuned strategy vs buy-and-hold**")
-        curves, context = validation_equity_curves()
-        if curves.empty:
-            placeholder("Run the optimiser first.", "python scripts/run_optimizer.py")
-        else:
-            normalised = curves / curves.iloc[0] * 100.0
-            figure = go.Figure()
-            figure.add_trace(
-                go.Scatter(
-                    x=normalised.index, y=normalised.iloc[:, 0],
-                    name=context["strategy"], line=dict(color=BLUE, width=2),
-                )
-            )
-            figure.add_trace(
-                go.Scatter(
-                    x=normalised.index, y=normalised["buy_and_hold"],
-                    name="buy and hold", line=dict(color=GREY, width=2, dash="dot"),
-                )
-            )
-            figure.update_layout(
-                height=280,
-                margin=dict(l=0, r=0, t=10, b=0),
-                yaxis_title="Equity (rebased to 100)",
-                legend=dict(orientation="h", y=1.15),
-            )
-            st.plotly_chart(figure, use_container_width=True)
-
-            strategy_metrics = context["strategy_metrics"]
-            benchmark_metrics = context["benchmark_metrics"]
-            comparison = pd.DataFrame(
-                {
-                    context["strategy"]: [
-                        pct(strategy_metrics["total_return"]),
-                        num(strategy_metrics["sharpe"]),
-                        pct(strategy_metrics["max_drawdown"]),
-                        f"{int(strategy_metrics['n_trades']):,}",
-                    ],
-                    "buy and hold": [
-                        pct(benchmark_metrics["total_return"]),
-                        num(benchmark_metrics["sharpe"]),
-                        pct(benchmark_metrics["max_drawdown"]),
-                        f"{int(benchmark_metrics['n_trades']):,}",
-                    ],
-                },
-                index=["Return", "Sharpe", "Max drawdown", "Trades"],
-            )
-            st.dataframe(comparison, use_container_width=True)
-
-    st.markdown("---")
-    st.markdown("**Is the winner a plateau or a lucky spike?**")
-    st.caption(
-        "Searching many configurations does not find a better strategy, it finds a luckier "
-        "one. A winner sitting close to its neighbourhood median is robust; one far above it "
-        "is parameter-sensitive and rarely survives out of sample."
-    )
-    optimizer = load_results_csv("optimizer_validation.csv")
-    if optimizer.empty:
-        placeholder("No parameter search yet.", "python scripts/run_optimizer.py")
-    else:
-        summary = (
-            optimizer.groupby(["strategy", "timeframe"])["sortino"]
-            .agg(configs="size", best="max", median="median", positive=lambda s: (s > 0).mean())
-            .reset_index()
-            .sort_values("best", ascending=False)
-        )
-        summary["spread_over_median"] = summary["best"] - summary["median"]
-        for column in ("best", "median", "spread_over_median"):
-            summary[column] = summary[column].map(lambda v: num(v))
-        summary["positive"] = summary["positive"].map(lambda v: pct(v, 0))
-        st.dataframe(summary.head(12), use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +348,13 @@ def render_ml() -> None:
         "the timeframe comparison meaningless. Scaling the barrier by ATR fixes it."
     )
     balance = label_balance_table()
-    if balance.empty:
+    if balance.empty and not has_local_trading_data():
+        placeholder(
+            "This table is recomputed from six years of raw candles, which are too "
+            "large to publish with the app. The model results below are saved outputs "
+            "and are unaffected."
+        )
+    elif balance.empty:
         placeholder("No cached price data.", "python scripts/fetch_data.py")
     else:
         view = balance.copy()
@@ -426,14 +394,14 @@ def render_ml() -> None:
         st.success(
             f"The model learned something real: {float(best['uplift_vs_dummy']):+.3f} balanced "
             "accuracy over a majority-class baseline. Whether that helps *trading* is a "
-            "separate question, answered in the Experiment tab."
+            "separate question, answered in the Results tab."
         )
     else:
         st.warning("No model beat the baseline. Reported as-is.")
 
 
 # ---------------------------------------------------------------------------
-# Experiment tab
+# Results tab
 # ---------------------------------------------------------------------------
 
 
@@ -527,92 +495,6 @@ def render_final_test() -> None:
         st.dataframe(view, use_container_width=True, hide_index=True, height=330)
 
 
-def render_experiment() -> None:
-    render_final_test()
-    st.markdown("---")
-    st.subheader("Question 3 - the A / B / C comparison (validation)")
-    st.caption(
-        "All arms trade the same signal universe with exactly one thing changed at a time. "
-        "Differences are reported with bootstrap confidence intervals, because at a few "
-        "hundred trades most differences are indistinguishable from noise."
-    )
-
-    systems = load_results_csv("systems_abc_4h.csv")
-    if systems.empty:
-        systems = load_results_csv("systems_ab_4h.csv")
-    if systems.empty:
-        placeholder(
-            "No system comparison yet. Run the ML comparison, then the LLM judge.",
-            "python scripts/run_ml.py\npython scripts/run_llm.py --threshold 0.35",
-        )
-        return
-
-    labels = {
-        "A_rules_only": "A - rules only",
-        "control_always_agree": "Control - approve everything",
-        "B_rules_plus_ml": "B - rules + ML filter",
-        "control_deterministic": "Control - deterministic judge",
-        "C_rules_ml_llm": "C - rules + ML + LLM judge",
-    }
-    systems = systems.copy()
-    systems["label"] = systems["system"].map(lambda s: labels.get(s, s))
-
-    columns = st.columns(len(systems))
-    for column, (_, row) in zip(columns, systems.iterrows()):
-        column.metric(
-            row["label"],
-            pct(row["total_return"]),
-            f"Sharpe {row['sharpe']:.2f}",
-        )
-
-    figure = go.Figure(
-        go.Bar(
-            x=systems["label"],
-            y=systems["total_return"] * 100,
-            marker_color=[signed_colour(v) for v in systems["total_return"]],
-            text=[pct(v) for v in systems["total_return"]],
-            textposition="outside",
-        )
-    )
-    figure.update_layout(
-        height=320, margin=dict(l=0, r=0, t=20, b=0), yaxis_title="Total return (%)"
-    )
-    st.plotly_chart(figure, use_container_width=True)
-
-    display = systems.copy()
-    for column in ("total_return", "max_drawdown", "win_rate", "exposure", "fees_pct_of_capital"):
-        if column in display:
-            display[column] = display[column].map(lambda v: pct(v))
-    for column in ("sharpe", "sortino", "profit_factor"):
-        if column in display:
-            display[column] = display[column].map(lambda v: num(v))
-    show = [
-        c
-        for c in ["label", "n_trades", "total_return", "sharpe", "sortino", "max_drawdown",
-                  "win_rate", "profit_factor", "exposure"]
-        if c in display.columns
-    ]
-    st.dataframe(display[show], use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-    st.markdown("**Trade counts matter more than they look**")
-    st.caption(
-        "Each filter can only remove trades, never add them. A smaller sample mechanically "
-        "changes win rate and drawdown even when the filter has no skill at all - which is "
-        "why the deterministic control arm exists, and why every difference is quoted with "
-        "an interval rather than as a point estimate."
-    )
-
-    st.info(
-        "**Reading the result honestly.** If a confidence interval contains zero, the two "
-        "systems are not distinguishable at this sample size. For 'did the LLM help?' that is "
-        "a legitimate answer, and a far more defensible one than quoting two point estimates "
-        "and declaring a winner.",
-        icon="ℹ️",
-    )
-
-
-
 # ---------------------------------------------------------------------------
 # AI Judge tab
 # ---------------------------------------------------------------------------
@@ -643,15 +525,6 @@ def render_judge() -> None:
     columns[1].metric("Approved", pct(approved.mean(), 0))
     columns[2].metric("Vetoed (HOLD)", pct(held.mean(), 0))
     columns[3].metric("Mean confidence", num(decisions["confidence"].mean(), 0))
-
-    st.info(
-        "**Neither degenerate.** A judge agreeing ~100% of the time is a rubber "
-        "stamp adding cost and latency for nothing; one agreeing ~50% on a "
-        "near-binary choice is closer to a coin flip than to judgement. This one "
-        "vetoed most proposals at moderate confidence - it genuinely deliberated, "
-        "and still did not beat four lines of arithmetic.",
-        icon="🧠",
-    )
 
     left, right = st.columns(2)
     with left:
@@ -726,93 +599,6 @@ def render_judge() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Method tab
-# ---------------------------------------------------------------------------
-
-
-def render_method() -> None:
-    st.subheader("How data leakage was prevented")
-    st.caption("The controls that make these numbers worth anything.")
-
-    st.dataframe(
-        pd.DataFrame(
-            [
-                ("Indicators peeking forward", "Hand-written; an automated test recomputes every indicator on truncated data and asserts history is unchanged"),
-                ("Ichimoku Chikou Span", "Excluded - it is the close shifted backwards, so reading it at t reads price at t+26"),
-                ("Fibonacci / swing support-resistance", "Excluded - derived from swing points identified with hindsight. Replaced by Donchian channels of the previous N bars"),
-                ("Shuffled time series", "Never shuffled; splits are strictly chronological"),
-                ("Overlapping labels at split seams", "4-bar embargo removed either side of every boundary"),
-                ("Scaler fitted on all data", "Fitted inside the pipeline, on train only"),
-                ("Test set used for tuning", "get_split('test') raises unless explicitly unlocked"),
-                ("Acting on an unclosed candle", "The loader drops the still-forming final candle"),
-                ("The LLM having memorised BTC history", "The prompt contains no dates and no absolute prices - only relative values. Enforced by test"),
-                ("Same-candle barrier ties", "Labelled HOLD and excluded, never guessed"),
-                ("Live inference using training data", "Inference uses the feature builder, not the label-filtered dataset. Enforced by test"),
-            ],
-            columns=["Risk", "Control"],
-        ),
-        use_container_width=True,
-        hide_index=True,
-        height=430,
-    )
-
-    st.markdown("---")
-    left, right = st.columns(2)
-
-    with left:
-        st.markdown("**Execution assumptions**")
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    ("Fill timing", "Signal on the close of bar t, filled at the open of t+1"),
-                    ("Taker fee", f"{BACKTEST.taker_fee:.3%} per side"),
-                    ("Slippage", f"{BACKTEST.slippage_bps:.0f} bps, always against us"),
-                    ("Same-bar stop and target", "Resolved as a stop - OHLCV cannot say which came first"),
-                    ("Gap through the stop", "Fills at the open, not the stop price"),
-                    ("Gap through the target", "Fills at the target - no credit for a favourable gap"),
-                    ("Risk per trade", f"{RISK.risk_per_trade:.1%} of equity"),
-                    ("Stop / target", f"{RISK.atr_stop_multiple:g} x ATR, {RISK.reward_risk_ratio:g}:1 reward:risk"),
-                    ("Daily loss limit", f"{RISK.max_daily_loss:.1%}"),
-                    ("Leverage", f"{BACKTEST.leverage:g}x"),
-                ],
-                columns=["Assumption", "Value"],
-            ),
-            use_container_width=True,
-            hide_index=True,
-            height=390,
-        )
-
-    with right:
-        st.markdown("**Architecture**")
-        st.code(
-            "OHLCV\n"
-            "  -> Indicators (causal, hand-written)\n"
-            "  -> Strategy engine        Question 1\n"
-            "  -> ML filter              Question 2\n"
-            "  -> LLM judge              Question 3\n"
-            "  -> DETERMINISTIC RISK MANAGER\n"
-            "  -> Executor -> broker\n"
-            "  -> SQLite -> this dashboard",
-            language="text",
-        )
-        st.caption(
-            "The judge chooses direction. It never chooses exposure: position size, stop "
-            "placement and the daily loss limit are arithmetic, downstream of every decision "
-            "layer and not delegated to anything that can hallucinate."
-        )
-        st.markdown("**Known limitations**")
-        st.markdown(
-            "- Backtests ignore perpetual funding payments.\n"
-            "- Live trading runs for hours, not months - it demonstrates the pipeline, "
-            "it is not evidence the strategy works.\n"
-            "- Fills are simulated: no queue position, no partial fills.\n"
-            "- Selecting the best of many configurations guarantees the winner is partly lucky.\n"
-            "- The validation period is a bull market and the test period a bear market, so "
-            "results are reported split by regime."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -837,21 +623,17 @@ def main() -> None:
         st.caption("Live panels refresh automatically every 20 seconds.")
 
     render_header()
-    live, research, ml, judge, experiment, method = st.tabs(
-        ["Live", "Research", "Machine learning", "AI Judge", "Experiment", "Method"]
+    live, results, ml, judge = st.tabs(
+        ["Live", "Results", "Machine learning", "AI Judge"]
     )
     with live:
         render_live()
-    with research:
-        render_research()
+    with results:
+        render_final_test()
     with ml:
         render_ml()
     with judge:
         render_judge()
-    with experiment:
-        render_experiment()
-    with method:
-        render_method()
 
 
 if __name__ == "__main__":
