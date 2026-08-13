@@ -110,7 +110,19 @@ def render_header() -> None:
     if not has_local_trading_data():
         live = load_live_price()
         columns = st.columns(3)
-        columns[0].metric("BTC now", f"{live:,.1f}" if live else "-")
+        if live:
+            columns[0].metric("BTC now", f"{live:,.1f}")
+        else:
+            # No venue reachable from this host; fall back to the snapshot's
+            # last close and say so, rather than showing a bare dash.
+            recent = load_recent_prices()
+            last = float(recent["close"].iloc[-1]) if not recent.empty else None
+            columns[0].metric(
+                "BTC last close",
+                f"{last:,.1f}" if last else "-",
+                "snapshot, not live",
+                delta_color="off",
+            )
         columns[1].metric("Best system, out-of-sample", "+1.6%", "Sharpe 0.22")
         columns[2].metric("Buy and hold, same period", "-41.0%", "Sharpe -0.96")
         return
@@ -224,12 +236,20 @@ def render_live() -> None:
     )
     st.plotly_chart(figure, use_container_width=True)
 
-    if prices.attrs.get("source") == "coinbase":
+    source = prices.attrs.get("source")
+    if source == "coinbase":
         st.caption(
             "Chart: Coinbase BTC-USD spot. Bybit refuses requests from datacenter "
             "IPs, so the published copy cannot reach the venue the research used. "
             "The two track each other closely, but this chart is context only - "
             "every backtest on this site was computed from Bybit BTCUSDT data."
+        )
+    elif source == "snapshot":
+        st.caption(
+            f"Chart: Bybit BTCUSDT, snapshot to {prices.index[-1]:%d %b %Y %H:%M} UTC - "
+            "**not live**. Both price APIs refuse requests from the datacenter this "
+            "app runs in, so it ships with a slice of real candles rather than a "
+            "blank panel. The research results in the other tabs are unaffected."
         )
 
     if not has_local_trading_data():

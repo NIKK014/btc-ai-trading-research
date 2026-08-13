@@ -14,6 +14,7 @@ run yet is useless during a presentation.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -150,6 +151,15 @@ def _coinbase_candles(timeframe: str, bars: int) -> pd.DataFrame:
     return frame[["open", "high", "low", "close", "volume"]].astype(float).tail(bars)
 
 
+def _snapshot_candles(timeframe: str, bars: int) -> pd.DataFrame:
+    """Real BTCUSDT candles committed to the repo, for when no venue answers."""
+    path = Path(__file__).resolve().parents[1] / "data" / "snapshot" / f"recent_{timeframe}.csv"
+    frame = pd.read_csv(path, index_col=0, parse_dates=[0])
+    if frame.index.tz is None:
+        frame.index = frame.index.tz_localize("UTC")
+    return frame.tail(bars)
+
+
 @st.cache_data(ttl=10)
 def load_live_price(symbol: str = DATA.symbol) -> Optional[float]:
     """Current spot price, for marking an open position to market.
@@ -205,7 +215,19 @@ def load_recent_prices(timeframe: str = "4h", bars: int = 200) -> pd.DataFrame:
 
     try:
         frame = _coinbase_candles(timeframe, bars)
-        frame.attrs["source"] = "coinbase"
+        if not frame.empty:
+            frame.attrs["source"] = "coinbase"
+            return frame
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Last resort, and the only branch guaranteed to work: a small committed
+    # slice of real BTCUSDT candles. Both live venues refuse datacenter IPs, so
+    # on the deployed copy this is usually what renders. Refresh it with
+    # scripts/export_snapshot.py.
+    try:
+        frame = _snapshot_candles(timeframe, bars)
+        frame.attrs["source"] = "snapshot"
         return frame
     except Exception:  # noqa: BLE001
         return pd.DataFrame()
