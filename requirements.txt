@@ -1,3 +1,9 @@
+# Runtime dependencies — what the dashboard and the trading loop need.
+#
+# Streamlit Cloud installs this file on every build, so it is deliberately
+# lean. Development-only tools (notebooks, plotting, the test runner) live in
+# requirements-dev.txt and are not installed on the deployed app.
+
 # Core data stack
 pandas>=2.2
 numpy>=1.26
@@ -6,24 +12,15 @@ pyarrow>=15.0          # Parquet cache
 # Machine learning
 scikit-learn>=1.4
 
-# Visualisation
-matplotlib>=3.8
-plotly>=5.20
-
-# App / dashboard
+# Dashboard
 streamlit>=1.35
+plotly>=5.20
 
 # APIs
 requests>=2.31
 openai>=1.30
 pydantic>=2.7          # structured LLM output validation
 python-dotenv>=1.0
-
-# Notebooks
-jupyter>=1.0
-
-# Testing
-pytest>=8.0
 
 # NOTE: pandas-ta and TA-Lib are deliberately NOT used.
 #   pandas-ta has NumPy 2.x incompatibilities and an uncertain maintenance

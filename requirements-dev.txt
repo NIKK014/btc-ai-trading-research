@@ -1,0 +1,12 @@
+# Development dependencies. Not installed on the deployed dashboard.
+#
+#   pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# Exploration notebooks
+jupyter>=1.0
+matplotlib>=3.8
+
+# Tests
+pytest>=8.0

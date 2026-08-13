@@ -52,12 +52,16 @@ Full results: [`docs/results.md`](docs/results.md)
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # add OPENAI_API_KEY for System C
+pip install -r requirements-dev.txt   # runtime deps + notebooks and pytest
+cp .env.example .env                  # add OPENAI_API_KEY for System C
 
 python scripts/fetch_data.py  # downloads and caches BTCUSDT 15m/1h/4h
-pytest -q                     # 187 tests, all offline
+pytest -q                     # 190 tests, all offline
 ```
+
+`requirements.txt` holds only what the app needs at runtime; that is the file
+the deployed dashboard installs. `requirements-dev.txt` adds Jupyter,
+matplotlib and pytest on top of it.
 
 ### Reproduce the study
 
